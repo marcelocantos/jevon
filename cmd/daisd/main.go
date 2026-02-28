@@ -12,6 +12,7 @@ import (
 	"syscall"
 
 	"github.com/marcelocantos/dais/internal/ctlapi"
+	"github.com/marcelocantos/dais/internal/db"
 	"github.com/marcelocantos/dais/internal/manager"
 	"github.com/marcelocantos/dais/internal/server"
 	"github.com/marcelocantos/dais/internal/shepherd"
@@ -163,6 +164,15 @@ func main() {
 
 	addr := fmt.Sprintf("http://localhost:%d", *port)
 
+	// Open database.
+	dbPath := filepath.Join(homeDir, ".dais", "dais.db")
+	database, err := db.Open(dbPath)
+	if err != nil {
+		slog.Error("cannot open database", "path", dbPath, "err", err)
+		os.Exit(1)
+	}
+	defer database.Close()
+
 	// Create components.
 	mgr := manager.New(*model, *workDir)
 
@@ -173,7 +183,7 @@ func main() {
 		CtlBin:  ctlBin,
 	})
 
-	srv := server.New(shep, version)
+	srv := server.New(shep, database, version)
 
 	// Wire ctlapi with shepherd event callback.
 	ctl := ctlapi.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {

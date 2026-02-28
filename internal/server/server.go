@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/marcelocantos/dais/internal/db"
 	"github.com/marcelocantos/dais/internal/shepherd"
 )
 
@@ -24,6 +25,7 @@ type TranscriptEntry struct {
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
 	shepherd *shepherd.Shepherd
+	db       *db.DB
 	version  string
 
 	mu         sync.Mutex
@@ -32,12 +34,31 @@ type Server struct {
 	turnBuf    string // accumulates shepherd text for current turn
 }
 
-// New creates a Server with the given shepherd and version string.
-func New(shep *shepherd.Shepherd, version string) *Server {
-	return &Server{
+// New creates a Server with the given shepherd, database, and version string.
+// It loads any existing transcript from the database.
+func New(shep *shepherd.Shepherd, database *db.DB, version string) *Server {
+	s := &Server{
 		shepherd: shep,
+		db:       database,
 		version:  version,
 	}
+
+	// Load persisted transcript.
+	if entries, err := database.LoadTranscript(); err != nil {
+		slog.Error("failed to load transcript", "err", err)
+	} else {
+		for _, e := range entries {
+			s.transcript = append(s.transcript, TranscriptEntry{
+				Role: e.Role,
+				Text: e.Text,
+			})
+		}
+		if len(s.transcript) > 0 {
+			slog.Info("loaded transcript from database", "entries", len(s.transcript))
+		}
+	}
+
+	return s
 }
 
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
@@ -99,14 +120,21 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 	s.shepherd.SetStatus(func(state string) {
 		if state == "idle" {
 			s.mu.Lock()
-			if s.turnBuf != "" {
+			turnText := s.turnBuf
+			if turnText != "" {
 				s.transcript = append(s.transcript, TranscriptEntry{
 					Role: "shepherd",
-					Text: s.turnBuf,
+					Text: turnText,
 				})
 				s.turnBuf = ""
 			}
 			s.mu.Unlock()
+
+			if turnText != "" {
+				if err := s.db.AppendTranscript("shepherd", turnText); err != nil {
+					slog.Error("failed to persist shepherd turn", "err", err)
+				}
+			}
 		}
 
 		s.writeJSON(conn, ctx, map[string]any{
@@ -164,6 +192,10 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 					Text: msg.Text,
 				})
 				s.mu.Unlock()
+
+				if err := s.db.AppendTranscript("user", msg.Text); err != nil {
+					slog.Error("failed to persist user message", "err", err)
+				}
 
 				s.shepherd.Enqueue(shepherd.Event{
 					Kind: shepherd.EventUserMessage,
