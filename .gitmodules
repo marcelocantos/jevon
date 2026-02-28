@@ -1,0 +1,3 @@
+[submodule "ge"]
+	path = ge
+	url = https://github.com/marcelocantos/ge.git
