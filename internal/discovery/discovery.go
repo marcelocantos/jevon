@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -221,7 +222,10 @@ func (s *Scanner) IsActive(uuid string) bool {
 }
 
 // activeUUIDs returns the set of session UUIDs that are currently in use
-// by a running claude process. Detected via process args (--resume <uuid>).
+// by a running claude process. Uses two strategies:
+//  1. Match --resume <uuid> in process args (for resumed sessions)
+//  2. Match process cwd to project directories (for fresh sessions)
+//
 // Results are cached for 5 seconds.
 func (s *Scanner) activeUUIDs() map[string]bool {
 	s.activeMu.Lock()
@@ -232,35 +236,202 @@ func (s *Scanner) activeUUIDs() map[string]bool {
 	}
 
 	result := make(map[string]bool)
-
-	// Parse ps output for claude processes with --resume <uuid>.
-	out, err := exec.Command("ps", "-eo", "args=").Output()
-	if err != nil {
+	defer func() {
 		s.activeCache = result
 		s.activeFetched = time.Now()
+	}()
+
+	// Find all claude process PIDs by executable name.
+	pidOut, err := exec.Command("pgrep", "-x", "claude").Output()
+	if err != nil {
+		return result // exit code 1 = no matches
+	}
+
+	pids := nonEmptyLines(string(pidOut))
+	if len(pids) == 0 {
 		return result
 	}
 
-	for _, line := range strings.Split(string(out), "\n") {
-		// Match lines that look like claude invocations with --resume.
-		idx := strings.Index(line, "--resume ")
+	// Get full args for all claude processes in one call.
+	psArgs := []string{"-ww", "-o", "pid=,args="}
+	for _, pid := range pids {
+		psArgs = append(psArgs, "-p", pid)
+	}
+	argsOut, err := exec.Command("ps", psArgs...).Output()
+	if err != nil {
+		return result
+	}
+
+	var unmatchedPIDs []string
+	for _, line := range nonEmptyLines(string(argsOut)) {
+		pid, args := splitPIDArgs(line)
+		if pid == "" {
+			continue
+		}
+		if uuid := extractResumeUUID(args); uuid != "" {
+			result[uuid] = true
+		} else {
+			unmatchedPIDs = append(unmatchedPIDs, pid)
+		}
+	}
+
+	// For processes without --resume, match by working directory.
+	if len(unmatchedPIDs) > 0 {
+		s.matchByCwd(unmatchedPIDs, result)
+	}
+
+	return result
+}
+
+// extractResumeUUID extracts a UUID from --resume <uuid> or --resume=<uuid>.
+func extractResumeUUID(args string) string {
+	for _, sep := range []string{"--resume ", "--resume="} {
+		idx := strings.Index(args, sep)
 		if idx < 0 {
 			continue
 		}
-		// Extract the token after --resume.
-		rest := line[idx+len("--resume "):]
+		rest := args[idx+len(sep):]
 		token := rest
 		if sp := strings.IndexByte(rest, ' '); sp >= 0 {
 			token = rest[:sp]
 		}
 		if IsUUID(token) {
-			result[token] = true
+			return token
 		}
 	}
+	return ""
+}
 
-	s.activeCache = result
-	s.activeFetched = time.Now()
+// splitPIDArgs splits a "  PID ARGS..." line from ps -o pid=,args= output.
+func splitPIDArgs(line string) (pid, args string) {
+	line = strings.TrimSpace(line)
+	sp := strings.IndexByte(line, ' ')
+	if sp < 0 {
+		return line, ""
+	}
+	return line[:sp], strings.TrimSpace(line[sp+1:])
+}
+
+// matchByCwd resolves active sessions for processes without --resume
+// by matching their working directory to project JSONL files.
+func (s *Scanner) matchByCwd(pids []string, result map[string]bool) {
+	cwdByPID := getCwds(pids)
+
+	// Group by cwd to handle multiple processes in the same directory.
+	pidsByCwd := make(map[string]int)
+	for _, cwd := range cwdByPID {
+		pidsByCwd[cwd]++
+	}
+
+	for cwd, count := range pidsByCwd {
+		encoded := encodeProjectDir(cwd)
+		projPath := filepath.Join(s.baseDir, encoded)
+		for _, uuid := range newestUnmatchedSessions(projPath, result, count) {
+			result[uuid] = true
+		}
+	}
+}
+
+// getCwds returns a map of PID to cwd for the given process IDs,
+// using lsof to resolve working directories.
+func getCwds(pids []string) map[string]string {
+	out, err := exec.Command("lsof", "-a", "-d", "cwd", "-Fn",
+		"-p", strings.Join(pids, ",")).Output()
+	if err != nil {
+		return nil
+	}
+	return parseLsofCwds(out)
+}
+
+// parseLsofCwds parses lsof -Fn output into a PID to path map.
+// Expected format: p<pid>\nfcwd\nn<path>\n repeated per process.
+func parseLsofCwds(out []byte) map[string]string {
+	result := make(map[string]string)
+	var currentPID string
+	expectPath := false
+
+	for _, line := range strings.Split(string(out), "\n") {
+		switch {
+		case strings.HasPrefix(line, "p"):
+			currentPID = line[1:]
+			expectPath = false
+		case line == "fcwd":
+			expectPath = true
+		case expectPath && strings.HasPrefix(line, "n"):
+			if currentPID != "" {
+				result[currentPID] = line[1:]
+			}
+			expectPath = false
+		}
+	}
 	return result
+}
+
+// encodeProjectDir encodes a filesystem path the same way Claude Code
+// encodes project directory names under ~/.claude/projects/.
+func encodeProjectDir(path string) string {
+	var b strings.Builder
+	for _, c := range path {
+		if (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+			(c >= '0' && c <= '9') || c == '-' {
+			b.WriteRune(c)
+		} else {
+			b.WriteByte('-')
+		}
+	}
+	return b.String()
+}
+
+// newestUnmatchedSessions returns up to n session UUIDs from projDir,
+// choosing the most recently modified JSONL files not already in matched.
+func newestUnmatchedSessions(projDir string, matched map[string]bool, n int) []string {
+	entries, err := os.ReadDir(projDir)
+	if err != nil {
+		return nil
+	}
+
+	type candidate struct {
+		uuid    string
+		modTime time.Time
+	}
+	var candidates []candidate
+
+	for _, e := range entries {
+		if e.IsDir() || !strings.HasSuffix(e.Name(), ".jsonl") {
+			continue
+		}
+		uuid := strings.TrimSuffix(e.Name(), ".jsonl")
+		if !IsUUID(uuid) || matched[uuid] {
+			continue
+		}
+		fi, err := e.Info()
+		if err != nil {
+			continue
+		}
+		candidates = append(candidates, candidate{uuid, fi.ModTime()})
+	}
+
+	sort.Slice(candidates, func(i, j int) bool {
+		return candidates[i].modTime.After(candidates[j].modTime)
+	})
+
+	var result []string
+	for i := 0; i < n && i < len(candidates); i++ {
+		result = append(result, candidates[i].uuid)
+	}
+	return result
+}
+
+// nonEmptyLines splits s by newlines and returns non-empty trimmed lines.
+func nonEmptyLines(s string) []string {
+	var lines []string
+	for _, line := range strings.Split(s, "\n") {
+		line = strings.TrimSpace(line)
+		if line != "" {
+			lines = append(lines, line)
+		}
+	}
+	return lines
 }
 
 // IsUUID checks if a string looks like a UUID (36 chars with hyphens at

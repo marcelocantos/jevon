@@ -36,6 +36,113 @@ func TestDecodeProjectDir(t *testing.T) {
 	}
 }
 
+func TestEncodeProjectDir(t *testing.T) {
+	tests := []struct {
+		input string
+		want  string
+	}{
+		{"/Users/marcelo/work/github.com/marcelocantos/dais", "-Users-marcelo-work-github-com-marcelocantos-dais"},
+		{"/Users/test/myproject", "-Users-test-myproject"},
+		{"/tmp", "-tmp"},
+	}
+	for _, tt := range tests {
+		if got := encodeProjectDir(tt.input); got != tt.want {
+			t.Errorf("encodeProjectDir(%q) = %q, want %q", tt.input, got, tt.want)
+		}
+	}
+}
+
+func TestExtractResumeUUID(t *testing.T) {
+	tests := []struct {
+		args string
+		want string
+	}{
+		{"claude --resume e7525328-f1a0-4d8e-b5cf-f5d94a267077", "e7525328-f1a0-4d8e-b5cf-f5d94a267077"},
+		{"claude --dangerously-skip-permissions --resume e7525328-f1a0-4d8e-b5cf-f5d94a267077", "e7525328-f1a0-4d8e-b5cf-f5d94a267077"},
+		{"claude --resume=e7525328-f1a0-4d8e-b5cf-f5d94a267077", "e7525328-f1a0-4d8e-b5cf-f5d94a267077"},
+		{"claude --resume e7525328-f1a0-4d8e-b5cf-f5d94a267077 --dangerously-skip-permissions", "e7525328-f1a0-4d8e-b5cf-f5d94a267077"},
+		{"claude", ""},
+		{"claude --resume", ""},          // no UUID after --resume
+		{"claude --resume not-uuid", ""}, // not a valid UUID
+	}
+	for _, tt := range tests {
+		if got := extractResumeUUID(tt.args); got != tt.want {
+			t.Errorf("extractResumeUUID(%q) = %q, want %q", tt.args, got, tt.want)
+		}
+	}
+}
+
+func TestSplitPIDArgs(t *testing.T) {
+	tests := []struct {
+		line     string
+		wantPID  string
+		wantArgs string
+	}{
+		{"52070 claude --resume abc", "52070", "claude --resume abc"},
+		{"  1234 claude", "1234", "claude"},
+		{"99", "99", ""},
+	}
+	for _, tt := range tests {
+		pid, args := splitPIDArgs(tt.line)
+		if pid != tt.wantPID || args != tt.wantArgs {
+			t.Errorf("splitPIDArgs(%q) = (%q, %q), want (%q, %q)",
+				tt.line, pid, args, tt.wantPID, tt.wantArgs)
+		}
+	}
+}
+
+func TestParseLsofCwds(t *testing.T) {
+	input := []byte("p52070\nfcwd\nn/Users/marcelo/work/dais\np75921\nfcwd\nn/Users/marcelo/work/other\n")
+	got := parseLsofCwds(input)
+	if len(got) != 2 {
+		t.Fatalf("got %d entries, want 2", len(got))
+	}
+	if got["52070"] != "/Users/marcelo/work/dais" {
+		t.Errorf("PID 52070 cwd = %q, want %q", got["52070"], "/Users/marcelo/work/dais")
+	}
+	if got["75921"] != "/Users/marcelo/work/other" {
+		t.Errorf("PID 75921 cwd = %q, want %q", got["75921"], "/Users/marcelo/work/other")
+	}
+}
+
+func TestNewestUnmatchedSessions(t *testing.T) {
+	dir := t.TempDir()
+
+	uuid1 := "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"
+	uuid2 := "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"
+	uuid3 := "cccccccc-cccc-cccc-cccc-cccccccccccc"
+
+	// Create files with staggered mod times.
+	for i, uuid := range []string{uuid1, uuid2, uuid3} {
+		path := filepath.Join(dir, uuid+".jsonl")
+		if err := os.WriteFile(path, []byte("{}"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+		// Stagger mod times: uuid1 oldest, uuid3 newest.
+		mtime := time.Now().Add(time.Duration(i-3) * time.Hour)
+		os.Chtimes(path, mtime, mtime)
+	}
+
+	// Request 1 — should get uuid3 (newest).
+	got := newestUnmatchedSessions(dir, nil, 1)
+	if len(got) != 1 || got[0] != uuid3 {
+		t.Errorf("n=1: got %v, want [%s]", got, uuid3)
+	}
+
+	// Request 2 — should get uuid3, uuid2.
+	got = newestUnmatchedSessions(dir, nil, 2)
+	if len(got) != 2 || got[0] != uuid3 || got[1] != uuid2 {
+		t.Errorf("n=2: got %v, want [%s %s]", got, uuid3, uuid2)
+	}
+
+	// With uuid3 already matched — should get uuid2.
+	matched := map[string]bool{uuid3: true}
+	got = newestUnmatchedSessions(dir, matched, 1)
+	if len(got) != 1 || got[0] != uuid2 {
+		t.Errorf("with matched: got %v, want [%s]", got, uuid2)
+	}
+}
+
 func TestScanAndGet(t *testing.T) {
 	// Create a temp directory structure mimicking ~/.claude/projects/.
 	base := t.TempDir()
