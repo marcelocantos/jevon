@@ -1,6 +1,6 @@
 // Package server implements the HTTP/WebSocket server for daisd,
 // handling remote client connections and routing messages through
-// the shepherd coordinator. Multiple clients can connect simultaneously
+// the Jevon coordinator. Multiple clients can connect simultaneously
 // and all observe the same session.
 package server
 
@@ -13,13 +13,13 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
-	"github.com/marcelocantos/dais/internal/db"
-	"github.com/marcelocantos/dais/internal/shepherd"
+	"github.com/marcelocantos/jevon/internal/db"
+	"github.com/marcelocantos/jevon/internal/jevon"
 )
 
 // TranscriptEntry is a single turn in the conversation log.
 type TranscriptEntry struct {
-	Role      string    `json:"role"`      // "user" or "shepherd"
+	Role      string    `json:"role"`      // "user" or "jevon"
 	Text      string    `json:"text"`
 	Timestamp time.Time `json:"timestamp"`
 }
@@ -31,25 +31,25 @@ type remoteConn struct {
 
 // Server is the daisd HTTP/WebSocket server.
 type Server struct {
-	shepherd *shepherd.Shepherd
-	db       *db.DB
-	version  string
+	jevon   *jevon.Jevon
+	db      *db.DB
+	version string
 
 	mu         sync.RWMutex
 	remotes    map[*websocket.Conn]remoteConn
 	transcript []TranscriptEntry
-	turnBuf    string // accumulates shepherd text for current turn
+	turnBuf    string // accumulates Jevon text for current turn
 }
 
-// New creates a Server with the given shepherd, database, and version string.
-// It loads any existing transcript from the database and wires shepherd
+// New creates a Server with the given Jevon instance, database, and version string.
+// It loads any existing transcript from the database and wires Jevon
 // callbacks for broadcasting to all connected clients.
-func New(shep *shepherd.Shepherd, database *db.DB, version string) *Server {
+func New(jev *jevon.Jevon, database *db.DB, version string) *Server {
 	s := &Server{
-		shepherd: shep,
-		db:       database,
-		version:  version,
-		remotes:  make(map[*websocket.Conn]remoteConn),
+		jevon:   jev,
+		db:      database,
+		version: version,
+		remotes: make(map[*websocket.Conn]remoteConn),
 	}
 
 	// Load persisted transcript.
@@ -68,13 +68,13 @@ func New(shep *shepherd.Shepherd, database *db.DB, version string) *Server {
 		}
 	}
 
-	// Wire shepherd callbacks once — they broadcast to all connected clients.
-	shep.SetRawLog(func(line []byte) {
-		if err := s.db.AppendRawLog("shepherd", string(line)); err != nil {
+	// Wire Jevon callbacks once — they broadcast to all connected clients.
+	jev.SetRawLog(func(line []byte) {
+		if err := s.db.AppendRawLog("jevon", string(line)); err != nil {
 			slog.Error("failed to persist raw log", "err", err)
 		}
 	})
-	shep.SetOutput(func(text string) {
+	jev.SetOutput(func(text string) {
 		s.mu.Lock()
 		s.turnBuf += text
 		s.mu.Unlock()
@@ -84,13 +84,13 @@ func New(shep *shepherd.Shepherd, database *db.DB, version string) *Server {
 			"content": text,
 		})
 	})
-	shep.SetStatus(func(state string) {
+	jev.SetStatus(func(state string) {
 		if state == "idle" {
 			s.mu.Lock()
 			turnText := s.turnBuf
 			if turnText != "" {
 				s.transcript = append(s.transcript, TranscriptEntry{
-					Role:      "shepherd",
+					Role:      "jevon",
 					Text:      turnText,
 					Timestamp: time.Now(),
 				})
@@ -99,8 +99,8 @@ func New(shep *shepherd.Shepherd, database *db.DB, version string) *Server {
 			s.mu.Unlock()
 
 			if turnText != "" {
-				if err := s.db.AppendTranscript("shepherd", turnText); err != nil {
-					slog.Error("failed to persist shepherd turn", "err", err)
+				if err := s.db.AppendTranscript("jevon", turnText); err != nil {
+					slog.Error("failed to persist jevon turn", "err", err)
 				}
 			}
 		}
@@ -115,7 +115,7 @@ func New(shep *shepherd.Shepherd, database *db.DB, version string) *Server {
 }
 
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
-// Additional routes (e.g. ctlapi) should be registered separately.
+// Additional routes (e.g. MCP server) should be registered separately.
 func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
@@ -218,8 +218,8 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 					"timestamp": now,
 				})
 
-				s.shepherd.Enqueue(shepherd.Event{
-					Kind: shepherd.EventUserMessage,
+				s.jevon.Enqueue(jevon.Event{
+					Kind: jevon.EventUserMessage,
 					Text: msg.Text,
 				})
 			}

@@ -4,7 +4,7 @@
 #include <spdlog/spdlog.h>
 
 int main() {
-    SPDLOG_INFO("dais starting");
+    SPDLOG_INFO("jevon starting");
 
     for (bool done = false; !done;) {
         ge::Session session;
@@ -20,5 +20,5 @@ int main() {
         });
     }
 
-    SPDLOG_INFO("dais exiting");
+    SPDLOG_INFO("jevon exiting");
 }

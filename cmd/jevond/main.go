@@ -11,17 +11,17 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/marcelocantos/dais/internal/cli"
-	"github.com/marcelocantos/dais/internal/ctlapi"
-	"github.com/marcelocantos/dais/internal/db"
-	"github.com/marcelocantos/dais/internal/discovery"
-	"github.com/marcelocantos/dais/internal/manager"
-	"github.com/marcelocantos/dais/internal/server"
-	"github.com/marcelocantos/dais/internal/shepherd"
+	"github.com/marcelocantos/jevon/internal/cli"
+	"github.com/marcelocantos/jevon/internal/db"
+	"github.com/marcelocantos/jevon/internal/discovery"
+	"github.com/marcelocantos/jevon/internal/jevon"
+	"github.com/marcelocantos/jevon/internal/manager"
+	"github.com/marcelocantos/jevon/internal/mcpserver"
+	"github.com/marcelocantos/jevon/internal/server"
 )
 
-// shepherdCLAUDEMD is the CLAUDE.md template written to the shepherd's workdir.
-const shepherdCLAUDEMD = `# Dais Shepherd
+// jevonCLAUDEMD is the CLAUDE.md template written to Jevon's workdir.
+const jevonCLAUDEMD = `# Jevon
 
 You are a voice-controlled coordinator for Claude Code sessions.
 The user interacts with you via voice on their phone. Your responses
@@ -39,30 +39,24 @@ are read aloud by text-to-speech.
 
 ## Worker Management
 
-You manage Claude Code workers via the ` + "`dais-ctl`" + ` command.
-Workers are Claude Code sessions that do actual coding work.
+You manage Claude Code workers via MCP tools provided by the jevon
+server. Workers are Claude Code sessions that do actual coding work.
 
-### Commands
+### Available MCP Tools
 
-` + "```bash" + `
-# Create a new worker
-dais-ctl create --name "descriptive name"
-
-# List all workers
-dais-ctl list
-
-# Send a command to a worker (returns immediately)
-dais-ctl command <worker-id> "the task description"
-
-# Wait for a worker to finish and get the result
-dais-ctl wait <worker-id>
-
-# Check worker status and last result
-dais-ctl status <worker-id>
-
-# Kill a worker
-dais-ctl kill <worker-id>
-` + "```" + `
+- **jevon_list_sessions** — List worker sessions and their status.
+  Optional: ` + "`all`" + ` (bool) to show all sessions.
+- **jevon_session_status** — Get status and last result of a worker.
+  Required: ` + "`id`" + ` (session UUID).
+- **jevon_create_session** — Create a new worker session.
+  Optional: ` + "`name`" + `, ` + "`workdir`" + `, ` + "`model`" + `.
+- **jevon_send_command** — Send a task to a worker.
+  Required: ` + "`id`" + `, ` + "`text`" + `.
+  Optional: ` + "`wait`" + ` (bool, default true). When true, blocks until
+  the worker finishes and returns the result. Set false for
+  long-running tasks — you will be notified when the worker finishes.
+- **jevon_kill_session** — Terminate a worker session.
+  Required: ` + "`id`" + `.
 
 ### Guidelines
 
@@ -70,10 +64,11 @@ dais-ctl kill <worker-id>
   without creating workers.
 - For coding tasks, create a worker with a clear, descriptive name.
 - One task per worker. Create multiple workers for parallel work.
-- Use ` + "`dais-ctl command`" + ` for tasks that will take a while.
-  The system will notify you when the worker finishes.
-- Use ` + "`dais-ctl command <id> ... && dais-ctl wait <id>`" + ` when
-  you need the result immediately for a quick task.
+- Use ` + "`jevon_send_command`" + ` with ` + "`wait: false`" + ` for tasks
+  that will take a while. The system will notify you when the worker
+  finishes.
+- Use ` + "`jevon_send_command`" + ` with ` + "`wait: true`" + ` (default)
+  when you need the result immediately for a quick task.
 - When a worker finishes, summarize the result conversationally.
 - If the user's request is vague, ask a clarifying question before
   creating a worker.
@@ -94,7 +89,7 @@ together, address them in a natural conversational flow.
 ## Directory Layout
 
 All repos live under ` + "`~/work/github.com/<org>/<repo>`" + `. For example:
-- ` + "`~/work/github.com/marcelocantos/dais`" + `
+- ` + "`~/work/github.com/marcelocantos/jevon`" + `
 - ` + "`~/work/github.com/squz/multimaze`" + `
 - ` + "`~/work/github.com/minicadesmobile/kart-stars`" + `
 
@@ -102,8 +97,8 @@ When creating workers for a repo, set the workdir accordingly.
 
 ## Tool Restrictions
 
-You may ONLY use the Bash tool to run ` + "`dais-ctl`" + ` commands.
-Do not use Bash for anything else. Do not read or write files.
+You may ONLY use the jevon MCP tools listed above.
+Do not use Bash. Do not read or write files.
 Do not run other commands.
 `
 
@@ -111,14 +106,14 @@ func main() {
 	port := flag.Int("port", 8080, "listen port")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
-	shepherdModel := flag.String("shepherd-model", "", "model for the shepherd (default: same as --model)")
+	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println("daisd", cli.Version)
+		fmt.Println("jevond", cli.Version)
 		os.Exit(0)
 	}
 	if *helpAgent {
@@ -136,43 +131,46 @@ func main() {
 		Level: logLevel,
 	})))
 
-	// Resolve shepherd model.
-	shepModel := *shepherdModel
-	if shepModel == "" {
-		shepModel = *model
+	// Resolve Jevon model.
+	jevModel := *jevonModel
+	if jevModel == "" {
+		jevModel = *model
 	}
 
-	// Set up shepherd workdir with CLAUDE.md.
+	// Set up Jevon workdir with CLAUDE.md.
 	homeDir, err := os.UserHomeDir()
 	if err != nil {
 		slog.Error("cannot determine home directory", "err", err)
 		os.Exit(1)
 	}
-	shepDir := filepath.Join(homeDir, ".dais", "shepherd")
-	if err := os.MkdirAll(shepDir, 0o755); err != nil {
-		slog.Error("cannot create shepherd workdir", "err", err)
+	jevDir := filepath.Join(homeDir, ".jevon", "jevon")
+	if err := os.MkdirAll(jevDir, 0o755); err != nil {
+		slog.Error("cannot create jevon workdir", "err", err)
 		os.Exit(1)
 	}
-	// Build shepherd CLAUDE.md, injecting managed-repos if available.
-	shepContent := shepherdCLAUDEMD
+	// Build Jevon CLAUDE.md, injecting managed-repos if available.
+	jevContent := jevonCLAUDEMD
 	reposFile := filepath.Join(homeDir, ".claude", "managed-repos.md")
 	if data, err := os.ReadFile(reposFile); err == nil {
-		shepContent += "\n## User's Repositories\n\n" + string(data)
+		jevContent += "\n## User's Repositories\n\n" + string(data)
 	}
-	claudeMD := filepath.Join(shepDir, "CLAUDE.md")
-	if err := os.WriteFile(claudeMD, []byte(shepContent), 0o644); err != nil {
-		slog.Error("cannot write shepherd CLAUDE.md", "err", err)
+	claudeMD := filepath.Join(jevDir, "CLAUDE.md")
+	if err := os.WriteFile(claudeMD, []byte(jevContent), 0o644); err != nil {
+		slog.Error("cannot write jevon CLAUDE.md", "err", err)
 		os.Exit(1)
 	}
 
-	// Find dais-ctl binary (next to daisd).
-	exe, _ := os.Executable()
-	ctlBin := filepath.Join(filepath.Dir(exe), "dais-ctl")
-
-	addr := fmt.Sprintf("http://localhost:%d", *port)
+	// Write .mcp.json for Jevon to discover the MCP server.
+	mcpJSON := fmt.Sprintf(
+		`{"mcpServers":{"jevon":{"url":"http://localhost:%d/mcp"}}}`, *port)
+	mcpJSONPath := filepath.Join(jevDir, ".mcp.json")
+	if err := os.WriteFile(mcpJSONPath, []byte(mcpJSON), 0o644); err != nil {
+		slog.Error("cannot write .mcp.json", "err", err)
+		os.Exit(1)
+	}
 
 	// Open database.
-	dbPath := filepath.Join(homeDir, ".dais", "dais.db")
+	dbPath := filepath.Join(homeDir, ".jevon", "jevon.db")
 	database, err := db.Open(dbPath)
 	if err != nil {
 		slog.Error("cannot open database", "path", dbPath, "err", err)
@@ -184,28 +182,26 @@ func main() {
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
 	mgr := manager.New(*model, *workDir, database, scanner)
 
-	shep := shepherd.New(shepherd.Config{
-		WorkDir:  shepDir,
-		Model:    shepModel,
-		CtlAddr:  addr,
-		CtlBin:   ctlBin,
-		ClaudeID: database.Get("shepherd_claude_id"),
+	jev := jevon.New(jevon.Config{
+		WorkDir:  jevDir,
+		Model:    jevModel,
+		ClaudeID: database.Get("jevon_claude_id"),
 	})
-	shep.SetClaudeIDCallback(func(id string) {
-		if err := database.Set("shepherd_claude_id", id); err != nil {
-			slog.Error("failed to persist shepherd claude ID", "err", err)
+	jev.SetClaudeIDCallback(func(id string) {
+		if err := database.Set("jevon_claude_id", id); err != nil {
+			slog.Error("failed to persist jevon claude ID", "err", err)
 		}
 	})
 
-	srv := server.New(shep, database, cli.Version)
+	srv := server.New(jev, database, cli.Version)
 
-	// Wire ctlapi with shepherd event callback.
-	ctl := ctlapi.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
-		kind := shepherd.EventWorkerCompleted
+	// Wire MCP server with Jevon event callback.
+	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {
+		kind := jevon.EventWorkerCompleted
 		if failed {
-			kind = shepherd.EventWorkerFailed
+			kind = jevon.EventWorkerFailed
 		}
-		shep.Enqueue(shepherd.Event{
+		jev.Enqueue(jevon.Event{
 			Kind:       kind,
 			WorkerID:   workerID,
 			WorkerName: workerName,
@@ -215,7 +211,7 @@ func main() {
 
 	mux := http.NewServeMux()
 	srv.RegisterRoutes(mux)
-	ctl.RegisterRoutes(mux)
+	mcpSrv.RegisterRoutes(mux)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -223,8 +219,8 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start shepherd event loop.
-	go shep.Run(ctx)
+	// Start Jevon event loop.
+	go jev.Run(ctx)
 
 	listenAddr := fmt.Sprintf(":%d", *port)
 	httpSrv := &http.Server{Addr: listenAddr, Handler: mux}
@@ -237,8 +233,8 @@ func main() {
 		httpSrv.Close()
 	}()
 
-	slog.Info("daisd starting", "addr", listenAddr, "version", cli.Version,
-		"shepherd_model", shepModel, "worker_model", *model)
+	slog.Info("jevond starting", "addr", listenAddr, "version", cli.Version,
+		"jevon_model", jevModel, "worker_model", *model)
 	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)

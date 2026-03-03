@@ -11,9 +11,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/marcelocantos/dais/internal/db"
-	"github.com/marcelocantos/dais/internal/discovery"
-	"github.com/marcelocantos/dais/internal/session"
+	"github.com/marcelocantos/jevon/internal/db"
+	"github.com/marcelocantos/jevon/internal/discovery"
+	"github.com/marcelocantos/jevon/internal/session"
 )
 
 // Half-life for session relevance decay (1 day).
@@ -249,7 +249,7 @@ func (m *Manager) rawLogFunc(sessionID string) session.RawLogFunc {
 }
 
 // IsExternallyActive checks whether a session's JSONL file is currently
-// open by another claude process (i.e., not managed by this daisd instance).
+// open by another claude process (i.e., not managed by this jevond instance).
 func (m *Manager) IsExternallyActive(id string) bool {
 	// If we're managing this session and it's running, it's us — not external.
 	m.mu.RLock()

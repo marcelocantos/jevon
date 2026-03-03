@@ -52,7 +52,7 @@ jobs:
           CGO_ENABLED: "1"
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
-          LDFLAGS="-X github.com/marcelocantos/dais/internal/cli.Version=${VERSION}"
+          LDFLAGS="-X github.com/marcelocantos/jevon/internal/cli.Version=${VERSION}"
           cp agents-guide.md internal/cli/help_agent.md
 
           CC=""
@@ -60,16 +60,15 @@ jobs:
             CC=aarch64-linux-gnu-gcc
           fi
 
-          CC="${CC}" go build -ldflags "${LDFLAGS}" -o daisd ./cmd/daisd
-          CC="${CC}" go build -ldflags "${LDFLAGS}" -o dais-ctl ./cmd/dais-ctl
+          CC="${CC}" go build -ldflags "${LDFLAGS}" -o jevond ./cmd/jevond
           CC="${CC}" go build -ldflags "${LDFLAGS}" -o remote ./cmd/remote
 
-          tar czf "dais-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
-            daisd dais-ctl remote
+          tar czf "jevon-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
+            jevond remote
 
       - name: Upload artifacts
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release upload "${{ github.ref_name }}" \
-            dais-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz
+            jevon-*-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz

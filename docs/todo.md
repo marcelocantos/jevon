@@ -1,5 +1,5 @@
 # TODO
 
-- Do dais minions survive daisd restart?
-- Can dais-ctl be an internal tool (e.g. MCP server) instead of a separate binary?
-- Rename project from "dais" to "jevon" (Jevons paradox reference)
+- Do jevon minions survive jevond restart?
+- ~~Can jevon-ctl be an internal tool (e.g. MCP server) instead of a separate binary?~~ Done — replaced with in-process MCP server.
+- ~~Rename project from "dais" to "jevon" (Jevons paradox reference)~~ Done.

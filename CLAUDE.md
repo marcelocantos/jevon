@@ -1,24 +1,25 @@
-# dais — Do As I Say!
+# jevon
 
 Remote control for Claude Code instances. Mobile UI rendered via ge engine's
 WebGPU wire protocol; Go coordinator daemon manages Claude Code workers.
 
 ## Architecture
 
-### C++ App (`bin/dais`)
+### C++ App (`bin/jevon`)
 - Phone UI rendered via ge's wire protocol (server on desktop, player on phone)
 - Built on the ge engine submodule (`ge/`)
 - Source in `src/`
 
-### Go Coordinator (`bin/daisd`)
+### Go Coordinator (`bin/jevond`)
 - HTTP/WebSocket server managing Claude Code workers
+- In-process MCP server for Jevon → worker management (no separate binary)
 - Voice pipeline: AssemblyAI streaming STT → LLM cleanup → learning memory
 - mTLS auth with QR-based device provisioning
 - Exposed to the internet via ngrok
-- Source in `cmd/daisd/` and `internal/`
+- Source in `cmd/jevond/` and `internal/`
 
 ### Communication
-Currently independent processes. Future: the C++ app connects to daisd
+Currently independent processes. Future: the C++ app connects to jevond
 for command routing and status updates.
 
 ## Build
@@ -26,8 +27,8 @@ for command routing and status updates.
 ```bash
 make              # Build both components
 make player       # Build squz player (desktop testing)
-make daisd        # Build Go coordinator only
-make bin/dais     # Build C++ app only (requires LFS libs)
+make jevond       # Build Go coordinator only
+make bin/jevon    # Build C++ app only (requires LFS libs)
 ```
 
 **Note:** The C++ app requires Git LFS objects (Dawn, SDL3 static
@@ -44,9 +45,9 @@ make run-app
 make player && bin/player
 
 # Terminal 3: Go coordinator
-make run-daisd
+make run-jevond
 
-# Or run both dais + daisd together:
+# Or run both jevon + jevond together:
 make run
 ```
 
@@ -98,7 +99,7 @@ make test-go      # Run Go tests only
 ## Project Structure
 
 ```
-dais/
+jevon/
 ├── Makefile              # Build orchestration
 ├── go.mod                # Go module
 ├── CLAUDE.md             # This file
@@ -107,7 +108,7 @@ dais/
 │   ├── App.h             # App class
 │   └── App.cpp           # Render, update, event handling
 ├── cmd/
-│   └── daisd/
+│   └── jevond/
 │       └── main.go       # Go coordinator entry point
 ├── internal/
 │   ├── server/           # HTTP/WebSocket server

@@ -9,9 +9,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/marcelocantos/dais/internal/db"
-	"github.com/marcelocantos/dais/internal/discovery"
-	"github.com/marcelocantos/dais/internal/session"
+	"github.com/marcelocantos/jevon/internal/db"
+	"github.com/marcelocantos/jevon/internal/discovery"
+	"github.com/marcelocantos/jevon/internal/session"
 )
 
 func testDB(t *testing.T) *db.DB {

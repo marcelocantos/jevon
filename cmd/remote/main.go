@@ -1,4 +1,4 @@
-// remote is a terminal client for daisd. It connects to the shepherd
+// remote is a terminal client for jevond. It connects to Jevon
 // and sends text messages, displaying streamed responses with markdown
 // rendering. Reconnects automatically with exponential backoff.
 package main
@@ -15,7 +15,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/marcelocantos/dais/internal/cli"
+	"github.com/marcelocantos/jevon/internal/cli"
 
 	"github.com/charmbracelet/bubbles/key"
 	"github.com/charmbracelet/bubbles/textarea"
@@ -32,8 +32,8 @@ import (
 type (
 	connectedMsg    string // server version
 	disconnectedMsg struct{ err error }
-	textMsg         string // incremental text from shepherd
-	statusMsg       string // shepherd status change
+	textMsg         string // incremental text from Jevon
+	statusMsg       string // Jevon status change
 	errorMsg        string // error from server
 	historyMsg      []historyEntry
 	userBroadcastMsg struct {
@@ -51,7 +51,7 @@ type historyEntry struct {
 // logEntry is a structured conversation entry, stored raw and
 // re-rendered on demand (for resize support).
 type logEntry struct {
-	kind      string    // "user", "shepherd", "status", "error"
+	kind      string    // "user", "jevon", "status", "error"
 	text      string    // raw text (markdown for chat, plain for status/error)
 	timestamp time.Time
 }
@@ -62,7 +62,7 @@ var (
 )
 
 func main() {
-	addr := flag.String("addr", "localhost:8080", "daisd address")
+	addr := flag.String("addr", "localhost:8080", "jevond address")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
@@ -111,7 +111,7 @@ func historyPath() string {
 	if err != nil {
 		return ""
 	}
-	dir := filepath.Join(home, ".dais")
+	dir := filepath.Join(home, ".jevon")
 	os.MkdirAll(dir, 0o755)
 	return filepath.Join(dir, "remote_history")
 }
@@ -166,12 +166,12 @@ type model struct {
 	input    textarea.Model
 	renderer *glamour.TermRenderer
 
-	// Shepherd state.
+	// Jevon state.
 	markdown  string    // accumulated markdown for current turn
 	rendered  string    // glamour-rendered output (for streaming display)
 	status    string    // "idle", "thinking", "disconnected"
 	version   string
-	turnStart time.Time // when the current shepherd turn began
+	turnStart time.Time // when the current Jevon turn began
 
 	// Conversation log (structured entries, re-rendered on demand).
 	entries []logEntry
@@ -323,7 +323,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.entries = nil
 		m.entries = append(m.entries, logEntry{
 			kind:      "status",
-			text:      fmt.Sprintf("Connected to daisd %s", m.version),
+			text:      fmt.Sprintf("Connected to jevond %s", m.version),
 			timestamp: time.Now(),
 		})
 		m.updateViewport()
@@ -362,7 +362,7 @@ func (m *model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.status == "idle" && m.markdown != "" {
 			// Turn complete — store raw markdown as a log entry.
 			m.entries = append(m.entries, logEntry{
-				kind:      "shepherd",
+				kind:      "jevon",
 				text:      m.markdown,
 				timestamp: m.turnStart,
 			})
@@ -525,7 +525,7 @@ func (m *model) renderLog() string {
 		switch entry.kind {
 		case "user":
 			t.Row(ts, "💬", m.renderBold(entry.text))
-		case "shepherd":
+		case "jevon":
 			t.Row(ts, "", m.glamourRender(entry.text))
 		case "status":
 			t.Row(ts, "", statusStyle.Render(entry.text))
@@ -537,7 +537,7 @@ func (m *model) renderLog() string {
 	return t.String()
 }
 
-// renderStreamingRow renders the in-progress shepherd response as a
+// renderStreamingRow renders the in-progress Jevon response as a
 // single-row table with the same column layout as the log.
 func (m *model) renderStreamingRow() string {
 	if m.width == 0 || m.rendered == "" {

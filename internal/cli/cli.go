@@ -1,7 +1,7 @@
 // Copyright 2026 Marcelo Cantos
 // SPDX-License-Identifier: Apache-2.0
 
-// Package cli provides shared values for dais binaries.
+// Package cli provides shared values for jevon binaries.
 package cli
 
 import _ "embed"

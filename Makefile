@@ -19,13 +19,13 @@ FRAMEWORKS := -framework Metal -framework QuartzCore -framework Foundation \
 # ── C++ app ──────────────────────────────────────────
 SRC := src/main.cpp src/App.cpp
 OBJ := $(patsubst %.cpp,$(BUILD_DIR)/%.o,$(SRC))
-APP := bin/dais
+APP := bin/jevon
 
 COMPILE_DB_DEPS += $(SRC) Makefile
 
 # ── Default target ───────────────────────────────────
 .PHONY: all
-all: $(APP) daisd dais-ctl remote
+all: $(APP) jevond remote
 
 # ── C++ binary ───────────────────────────────────────
 $(APP): $(OBJ) $(ge/SESSION_WIRE_OBJ) $(ge/LIB) $(ge/FRAMEWORK_LIBS)
@@ -45,26 +45,19 @@ player: $(ge/PLAYER)
 
 # ── Go binaries ─────────────────────────────────────
 VERSION  ?= dev
-LDFLAGS  := -ldflags "-X github.com/marcelocantos/dais/internal/cli.Version=$(VERSION)"
+LDFLAGS  := -ldflags "-X github.com/marcelocantos/jevon/internal/cli.Version=$(VERSION)"
 GO_SRC   := $(shell find cmd internal -name '*.go' 2>/dev/null)
 EMBED_GUIDE := internal/cli/help_agent.md
 
 $(EMBED_GUIDE): agents-guide.md
 	cp $< $@
 
-.PHONY: daisd
-daisd: bin/daisd
+.PHONY: jevond
+jevond: bin/jevond
 
-bin/daisd: $(GO_SRC) $(EMBED_GUIDE)
+bin/jevond: $(GO_SRC) $(EMBED_GUIDE)
 	@mkdir -p bin
-	go build $(LDFLAGS) -o bin/daisd ./cmd/daisd
-
-.PHONY: dais-ctl
-dais-ctl: bin/dais-ctl
-
-bin/dais-ctl: $(GO_SRC) $(EMBED_GUIDE)
-	@mkdir -p bin
-	go build $(LDFLAGS) -o bin/dais-ctl ./cmd/dais-ctl
+	go build $(LDFLAGS) -o bin/jevond ./cmd/jevond
 
 .PHONY: remote
 remote: bin/remote
@@ -74,26 +67,26 @@ bin/remote: $(GO_SRC) $(EMBED_GUIDE)
 	go build $(LDFLAGS) -o bin/remote ./cmd/remote
 
 # ── Run ──────────────────────────────────────────────
-.PHONY: run run-app run-daisd run-remote
+.PHONY: run run-app run-jevond run-remote
 run-app: $(APP)
 	$(APP)
 
-run-daisd: bin/daisd
-	bin/daisd
+run-jevond: bin/jevond
+	bin/jevond
 
 run-remote: bin/remote
 	bin/remote
 
-run: $(APP) bin/daisd
+run: $(APP) bin/jevond
 	@trap 'kill 0' INT TERM; \
-	bin/daisd & \
+	bin/jevond & \
 	$(APP) & \
 	wait
 
 # ── Setup ────────────────────────────────────────────
 .PHONY: init
 init: ge/init
-	@echo "── dais project setup ──"
+	@echo "── jevon project setup ──"
 	@command -v go >/dev/null 2>&1 || { echo "ERROR: Go not found. Install from https://go.dev/dl/"; exit 1; }
 	@echo "  Go: $$(go version)"
 	@go mod download

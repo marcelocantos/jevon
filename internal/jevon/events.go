@@ -1,7 +1,7 @@
-// Package shepherd implements the coordinator that sits between the user
+// Package jevon implements the coordinator that sits between the user
 // and multiple Claude Code worker sessions, routing tasks and synthesizing
 // results into a conversational interface.
-package shepherd
+package jevon
 
 import (
 	"fmt"
@@ -9,7 +9,7 @@ import (
 	"time"
 )
 
-// EventKind identifies what triggered a shepherd turn.
+// EventKind identifies what triggered a Jevon turn.
 type EventKind string
 
 const (
@@ -19,7 +19,7 @@ const (
 	EventWorkerStarted   EventKind = "worker_started"
 )
 
-// Event is something the shepherd needs to know about.
+// Event is something Jevon needs to know about.
 type Event struct {
 	Kind      EventKind
 	Timestamp time.Time
@@ -34,7 +34,7 @@ type Event struct {
 }
 
 // FormatPrompt converts a batch of events into a prompt string for the
-// shepherd LLM. Events are prefixed with [USER] or [WORKER] tags.
+// Jevon LLM. Events are prefixed with [USER] or [WORKER] tags.
 func FormatPrompt(events []Event) string {
 	var b strings.Builder
 	for _, ev := range events {
