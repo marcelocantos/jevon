@@ -1,6 +1,6 @@
-# jevon Agent Guide
+# Jevon Agent Guide
 
-jevon is a remote control system for Claude Code instances.
+Jevon is a remote control system for Claude Code instances.
 It consists of a coordinator daemon (`jevond`) and a TUI client (`remote`).
 
 ## Architecture
@@ -33,7 +33,7 @@ remote --addr localhost:8080
 - **Jevon**: A Claude Code session managed by jevond that coordinates
   workers. It receives user messages and decides whether to answer
   directly or delegate to workers. It manages workers via MCP tools
-  provided by the jevon server.
+  provided by the Jevon server.
 - **Workers**: Claude Code sessions that do actual coding work. Jevon
   creates and manages them via MCP tools.
 - **Remote clients**: Multiple TUI or mobile clients can connect

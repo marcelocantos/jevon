@@ -29,8 +29,8 @@ func TestIsUUID(t *testing.T) {
 }
 
 func TestDecodeProjectDir(t *testing.T) {
-	got := decodeProjectDir("-Users-marcelo-work-github-com-marcelocantos-dais")
-	want := "/Users/marcelo/work/github/com/marcelocantos/dais"
+	got := decodeProjectDir("-Users-marcelo-work-github-com-marcelocantos-jevon")
+	want := "/Users/marcelo/work/github/com/marcelocantos/jevon"
 	if got != want {
 		t.Errorf("decodeProjectDir = %q, want %q", got, want)
 	}
@@ -41,7 +41,7 @@ func TestEncodeProjectDir(t *testing.T) {
 		input string
 		want  string
 	}{
-		{"/Users/marcelo/work/github.com/marcelocantos/dais", "-Users-marcelo-work-github-com-marcelocantos-dais"},
+		{"/Users/marcelo/work/github.com/marcelocantos/jevon", "-Users-marcelo-work-github-com-marcelocantos-jevon"},
 		{"/Users/test/myproject", "-Users-test-myproject"},
 		{"/tmp", "-tmp"},
 	}
@@ -92,13 +92,13 @@ func TestSplitPIDArgs(t *testing.T) {
 }
 
 func TestParseLsofCwds(t *testing.T) {
-	input := []byte("p52070\nfcwd\nn/Users/marcelo/work/dais\np75921\nfcwd\nn/Users/marcelo/work/other\n")
+	input := []byte("p52070\nfcwd\nn/Users/marcelo/work/jevon\np75921\nfcwd\nn/Users/marcelo/work/other\n")
 	got := parseLsofCwds(input)
 	if len(got) != 2 {
 		t.Fatalf("got %d entries, want 2", len(got))
 	}
-	if got["52070"] != "/Users/marcelo/work/dais" {
-		t.Errorf("PID 52070 cwd = %q, want %q", got["52070"], "/Users/marcelo/work/dais")
+	if got["52070"] != "/Users/marcelo/work/jevon" {
+		t.Errorf("PID 52070 cwd = %q, want %q", got["52070"], "/Users/marcelo/work/jevon")
 	}
 	if got["75921"] != "/Users/marcelo/work/other" {
 		t.Errorf("PID 75921 cwd = %q, want %q", got["75921"], "/Users/marcelo/work/other")

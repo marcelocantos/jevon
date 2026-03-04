@@ -1,4 +1,4 @@
-# jevon
+# Jevon ([why?](#about-the-name))
 
 Remote control for [Claude Code](https://docs.anthropic.com/en/docs/claude-code)
 instances. Talk to a coordinator that manages Claude Code workers — from a
@@ -83,6 +83,16 @@ jevond stores its data in `~/.jevon/`:
 If you use an agentic coding tool, include
 [`agents-guide.md`](agents-guide.md) in your project context for a detailed
 reference. You can also run `jevond --help-agent` to get the same information.
+
+## About the name
+
+Jevon is named after [Jevons paradox](https://en.wikipedia.org/wiki/Jevons_paradox):
+when technological progress makes a resource cheaper to use, total consumption
+of that resource tends to *increase* rather than decrease. AI coding assistants
+make development dramatically more efficient — so you end up doing more of it,
+not less. Jevon leans into this by letting you orchestrate multiple Claude Code
+sessions at once, multiplying the effect — so keep an eye on your AI bill at
+the end of the month.
 
 ## Licence
 

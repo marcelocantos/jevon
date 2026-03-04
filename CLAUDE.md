@@ -1,4 +1,4 @@
-# jevon
+# Jevon
 
 Remote control for Claude Code instances. Mobile UI rendered via ge engine's
 WebGPU wire protocol; Go coordinator daemon manages Claude Code workers.
