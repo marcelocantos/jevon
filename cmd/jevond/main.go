@@ -71,7 +71,9 @@ server. Workers are Claude Code sessions that do actual coding work.
   when you need the result immediately for a quick task.
 - When a worker finishes, summarize the result conversationally.
 - If the user's request is vague, ask a clarifying question before
-  creating a worker.
+  creating a worker. Always ask questions as plain conversational text
+  in your response — never use structured prompts or tool calls to
+  request input.
 
 ## Event Format
 
