@@ -16,7 +16,7 @@ with Jevon's coordinator role are disabled.
   TaskOutput, TaskStop, EnterWorktree, Skill, NotebookEdit.
 - Jevon builds and runs without errors.
 
-**Status:** converging — disallowed tools added, not yet committed.
+**Status:** achieved — committed and pushed (cf54767).
 
 ### 🎯T2 Conversational interaction model works end-to-end [high]
 
@@ -31,8 +31,7 @@ structured UI widgets are needed for agent-initiated questions.
 - Worker questions are relayed through Jevon (already the case — workers
   run fire-and-forget, results come back to Jevon who can rephrase).
 
-**Status:** converging — tool disabled, CLAUDE.md template not yet
-updated with conversational guidance.
+**Status:** achieved — tool disabled, CLAUDE.md template updated (83cc4a4).
 
 ### 🎯T3 Test coverage exists for core packages [medium]
 
