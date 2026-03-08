@@ -2,23 +2,6 @@
 
 ## Active
 
-### 🎯T4 Trust model defined for pre-1.0
-
-- **Weight**: 4 (value 13 / cost 3)
-- **Estimated-cost**: 3
-- **Gates**: 🎯T5, 🎯T6
-- **Status**: identified
-- **Discovered**: 2026-03-07
-
-**Desired state:** A documented trust model replaces blanket permission
-bypass. Defines what Jevon and workers can do without approval, what
-requires confirmation, and how confirmation flows to the user.
-
-**Acceptance criteria:**
-- A design document exists (e.g., docs/trust-model.md) describing the
-  permission tiers and confirmation flow.
-- STABILITY.md's "Needs a trust model before 1.0" note is resolved.
-
 ### 🎯T5 Authentication implemented
 
 - **Weight**: 1 (value 8 / cost 13)
@@ -72,6 +55,13 @@ jevond — sending commands, viewing responses, and managing workers.
 - App works on iOS (primary target: Pippa, iPad Air 5th gen).
 
 ## Achieved
+
+### 🎯T4 Trust model defined for pre-1.0
+
+Achieved. Trust model documented in `docs/trust-model.md` with three
+permission tiers (autonomous, confirmed, prohibited) and WebSocket
+confirmation flow. STABILITY.md updated to reference the design.
+
 
 ### 🎯T1 Jevon's tool surface is locked down [high]
 

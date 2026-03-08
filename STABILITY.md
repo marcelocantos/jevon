@@ -134,7 +134,8 @@ The following must be addressed before 1.0:
   stub. mTLS with QR-based device provisioning is planned but unimplemented.
 - **Permission model**: Both Jevon and workers run with permissions bypassed
   (`--permission-mode bypassPermissions`, `--dangerously-skip-permissions`).
-  Needs a trust model before 1.0.
+  Trust model defined in `docs/trust-model.md`; implementation tracked by
+  🎯T5 (authentication) and 🎯T6 (permission enforcement).
 
 ### Protocol and API
 - **Error message type**: Defined in the protocol but never emitted by the
