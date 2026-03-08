@@ -62,7 +62,7 @@ var (
 )
 
 func main() {
-	addr := flag.String("addr", "localhost:8080", "jevond address")
+	addr := flag.String("addr", "localhost:13705", "jevond address")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()

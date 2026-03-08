@@ -6,7 +6,7 @@ import SwiftUI
 struct ConnectView: View {
     @Environment(Connection.self) private var connection
     @State private var host: String = ""
-    @State private var portText: String = "8080"
+    @State private var portText: String = "13705"
 
     var body: some View {
         NavigationStack {

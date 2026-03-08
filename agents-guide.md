@@ -21,11 +21,11 @@ It consists of a coordinator daemon (`jevond`) and a TUI client (`remote`).
 ## Running
 
 ```bash
-# Start the coordinator (default port 8080)
-jevond --port 8080 --workdir ~/projects --model sonnet
+# Start the coordinator (default port 13705)
+jevond --port 13705 --workdir ~/projects --model sonnet
 
 # Connect a terminal client
-remote --addr localhost:8080
+remote --addr localhost:13705
 ```
 
 ## Key concepts

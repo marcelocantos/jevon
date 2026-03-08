@@ -16,7 +16,7 @@ Snapshot as of v0.1.0.
 
 | Flag | Type | Default | Stability |
 |---|---|---|---|
-| `--port` | int | `8080` | Stable |
+| `--port` | int | `13705` | Stable |
 | `--workdir` | string | `"."` | Needs review — semantics may evolve with project management features |
 | `--model` | string | `""` | Needs review — may consolidate with config file |
 | `--jevon-model` | string | `""` | Needs review — same concern |
@@ -28,7 +28,7 @@ Snapshot as of v0.1.0.
 
 | Flag | Type | Default | Stability |
 |---|---|---|---|
-| `--addr` | string | `"localhost:8080"` | Needs review — name/semantics will change with mTLS |
+| `--addr` | string | `"localhost:13705"` | Needs review — name/semantics will change with mTLS |
 | `--version` | bool | `false` | Stable |
 | `--help-agent` | bool | `false` | Stable |
 

@@ -105,7 +105,7 @@ Do not run other commands.
 `
 
 func main() {
-	port := flag.Int("port", 8080, "listen port")
+	port := flag.Int("port", 13705, "listen port")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")

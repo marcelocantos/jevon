@@ -13,7 +13,7 @@ struct JevonApp: App {
                 .environment(connection)
                 .task {
                     #if targetEnvironment(simulator)
-                    connection.connect(to: "localhost", port: 8080)
+                    connection.connect(to: "localhost", port: 13705)
                     #endif
                 }
         }

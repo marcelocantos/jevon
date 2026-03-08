@@ -40,10 +40,10 @@ Requires Go 1.22+ and a C compiler (CGo is needed for SQLite).
 
 ```bash
 # Start the coordinator
-jevond --port 8080 --workdir ~/projects --model sonnet
+jevond --port 13705 --workdir ~/projects --model sonnet
 
 # Connect from another terminal
-remote --addr localhost:8080
+remote --addr localhost:13705
 ```
 
 Type a message and press Enter. Jevon will either answer directly or
@@ -54,7 +54,7 @@ time.
 
 ```
 jevond:
-  --port              Listen port (default 8080)
+  --port              Listen port (default 13705)
   --workdir           Default working directory for workers (default ".")
   --model             Default model for workers
   --jevon-model       Model for Jevon (default: same as --model)
@@ -63,7 +63,7 @@ jevond:
   --help-agent        Print agent guide and exit
 
 remote:
-  --addr              jevond address (default "localhost:8080")
+  --addr              jevond address (default "localhost:13705")
   --version           Print version and exit
   --help-agent        Print agent guide and exit
 ```
