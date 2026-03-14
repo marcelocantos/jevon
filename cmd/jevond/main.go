@@ -228,6 +228,10 @@ func main() {
 			if err := syncMgr.SeedTranscript(database.SqlDB()); err != nil {
 				slog.Warn("sqlpipe: transcript seeding failed", "err", err)
 			}
+			// Flush seed data so it's available for the first client handshake.
+			if _, err := syncMgr.Flush(); err != nil {
+				slog.Warn("sqlpipe: post-seed flush failed", "err", err)
+			}
 		}
 	}
 
