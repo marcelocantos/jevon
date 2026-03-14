@@ -470,13 +470,14 @@ final class Connection {
         do {
             let peer = try SyncPeer(dbPath: dbPath, ownedTables: ["requests"])
 
-            // Create client-owned requests table.
+            // Create client-owned table. Server-owned tables are created
+            // automatically via the on_schema_mismatch callback during handshake.
             try peer.execute("""
                 CREATE TABLE IF NOT EXISTS requests (
-                    id INTEGER PRIMARY KEY,
-                    type TEXT NOT NULL,
-                    payload TEXT NOT NULL,
-                    created_at TEXT NOT NULL DEFAULT (datetime('now'))
+                    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+                    type       TEXT NOT NULL,
+                    payload    TEXT NOT NULL DEFAULT '',
+                    created_at TEXT NOT NULL DEFAULT (strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
                 )
                 """)
 

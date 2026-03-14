@@ -122,7 +122,16 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 
 	master, err := sqlpipe.NewMaster(masterConn, sqlpipe.MasterConfig{
 		TableFilter: &sqlpipe.TableFilter{Tables: serverTables},
-		OnLog:       logCb,
+		OnSchemaMismatch: func(remoteSV, localSV sqlpipe.SchemaVersion, remoteSQL string) bool {
+			slog.Info("sqlpipe master schema mismatch — applying remote schema",
+				"remote_sv", remoteSV, "local_sv", localSV)
+			if _, err := db.Exec(remoteSQL); err != nil {
+				slog.Error("schema migration failed", "err", err)
+				return false
+			}
+			return true
+		},
+		OnLog: logCb,
 	})
 	if err != nil {
 		replicaConn.Close()
@@ -134,6 +143,15 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 
 	replica, err := sqlpipe.NewReplica(replicaConn, sqlpipe.ReplicaConfig{
 		TableFilter: &sqlpipe.TableFilter{Tables: clientTables},
+		OnSchemaMismatch: func(remoteSV, localSV sqlpipe.SchemaVersion, remoteSQL string) bool {
+			slog.Info("sqlpipe replica schema mismatch — applying remote schema",
+				"remote_sv", remoteSV, "local_sv", localSV)
+			if _, err := db.Exec(remoteSQL); err != nil {
+				slog.Error("schema migration failed", "err", err)
+				return false
+			}
+			return true // retry with updated schema
+		},
 		OnConflict: func(ct sqlpipe.ConflictType, ce sqlpipe.ChangeEvent) sqlpipe.ConflictAction {
 			slog.Warn("sqlpipe replica conflict", "type", ct, "table", ce.Table)
 			return sqlpipe.ConflictReplace
@@ -155,6 +173,41 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 // DB returns the underlying *sql.DB for use by other packages that
 // need direct database access (e.g., the existing db.DB wrapper).
 func (sm *SyncManager) DB() *sql.DB { return sm.db }
+
+// SeedTranscript copies messages from the legacy transcript table into
+// sync_transcript if sync_transcript is empty. Called once at startup.
+func (sm *SyncManager) SeedTranscript(legacyDB *sql.DB) error {
+	sm.mu.Lock()
+	defer sm.mu.Unlock()
+
+	var count int
+	if err := sm.db.QueryRow("SELECT COUNT(*) FROM sync_transcript").Scan(&count); err != nil {
+		return err
+	}
+	if count > 0 {
+		return nil // already seeded
+	}
+
+	rows, err := legacyDB.Query("SELECT role, text, created_at FROM transcript ORDER BY rowid")
+	if err != nil {
+		return err
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var role, text, ts string
+		if err := rows.Scan(&role, &text, &ts); err != nil {
+			return err
+		}
+		if _, err := sm.masterConn.ExecContext(context.Background(),
+			"INSERT INTO sync_transcript (role, content, timestamp) VALUES (?, ?, ?)",
+			role, text, ts,
+		); err != nil {
+			return err
+		}
+	}
+	return rows.Err()
+}
 
 // ── Wire framing ────────────────────────────────────────────────
 //
@@ -334,7 +387,7 @@ func (sm *SyncManager) WriteTranscript(role, content string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.db.Exec(
+	_, err := sm.masterConn.ExecContext(context.Background(),
 		`INSERT INTO sync_transcript (role, content) VALUES (?, ?)`,
 		role, content,
 	)
@@ -349,7 +402,7 @@ func (sm *SyncManager) WriteServerState(status, streamingText string) ([]byte, e
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.db.Exec(
+	_, err := sm.masterConn.ExecContext(context.Background(),
 		`UPDATE server_state SET status = ?, streaming_text = ? WHERE id = 1`,
 		status, streamingText,
 	)
@@ -364,7 +417,7 @@ func (sm *SyncManager) AppendStreamingText(text string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.db.Exec(
+	_, err := sm.masterConn.ExecContext(context.Background(),
 		`UPDATE server_state SET streaming_text = streaming_text || ? WHERE id = 1`,
 		text,
 	)
@@ -379,7 +432,7 @@ func (sm *SyncManager) ClearStreamingText() ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.db.Exec(
+	_, err := sm.masterConn.ExecContext(context.Background(),
 		`UPDATE server_state SET streaming_text = '' WHERE id = 1`)
 	if err != nil {
 		return nil, fmt.Errorf("clear streaming_text: %w", err)
@@ -402,7 +455,7 @@ func (sm *SyncManager) WriteSessions(sessions []SessionData) ([]byte, error) {
 		if s.Active {
 			active = 1
 		}
-		_, err := sm.db.Exec(
+		_, err := sm.masterConn.ExecContext(context.Background(),
 			`INSERT INTO sessions (id, name, status, workdir, active, score, mod_time)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(id) DO UPDATE SET
@@ -426,7 +479,7 @@ func (sm *SyncManager) WriteScripts(name, source string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.db.Exec(
+	_, err := sm.masterConn.ExecContext(context.Background(),
 		`INSERT INTO scripts (name, source, updated_at)
 		 VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 		 ON CONFLICT(name) DO UPDATE SET
@@ -445,7 +498,7 @@ func (sm *SyncManager) SetVersion(version string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.db.Exec(
+	_, err := sm.masterConn.ExecContext(context.Background(),
 		`UPDATE server_state SET version = ? WHERE id = 1`, version)
 	return err
 }

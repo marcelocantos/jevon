@@ -224,6 +224,10 @@ func main() {
 			if err := syncMgr.SetVersion(cli.Version); err != nil {
 				slog.Warn("sqlpipe: failed to set version", "err", err)
 			}
+			// Seed sync_transcript from legacy transcript table.
+			if err := syncMgr.SeedTranscript(database.SqlDB()); err != nil {
+				slog.Warn("sqlpipe: transcript seeding failed", "err", err)
+			}
 		}
 	}
 

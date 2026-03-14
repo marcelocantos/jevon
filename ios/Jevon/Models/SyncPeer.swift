@@ -87,6 +87,28 @@ final class SyncPeer {
             cfg.owned_tables = buf.baseAddress
             cfg.owned_table_count = ownedTables.count
 
+            // Schema mismatch callback — apply remote schema to local DB.
+            // The remote_schema_sql contains semicolon-separated CREATE TABLE
+            // statements from the server. We execute them to create any missing
+            // tables, then return true to retry the handshake.
+            cfg.on_schema_mismatch = { ctx, remoteSV, localSV, remoteSchemaSQL in
+                guard let remoteSchemaSQL, let db = ctx?.assumingMemoryBound(to: OpaquePointer?.self).pointee else {
+                    return 0
+                }
+                let sql = String(cString: remoteSchemaSQL)
+                logger.info("Schema mismatch — applying remote schema (\(sql.count) chars)")
+                for stmt in sql.components(separatedBy: ";") {
+                    let trimmed = stmt.trimmingCharacters(in: .whitespacesAndNewlines)
+                    guard !trimmed.isEmpty else { continue }
+                    if sqlite3_exec(db, trimmed, nil, nil, nil) != SQLITE_OK {
+                        let err = String(cString: sqlite3_errmsg(db))
+                        logger.error("Schema apply failed: \(err) — stmt: \(trimmed.prefix(100))")
+                    }
+                }
+                return 1  // retry
+            }
+            cfg.schema_mismatch_ctx = withUnsafeMutablePointer(to: &self.db) { UnsafeMutableRawPointer($0) }
+
             // Set up logging callback.
             cfg.on_log = { ctx, level, message in
                 guard let message else { return }
@@ -132,7 +154,7 @@ final class SyncPeer {
             logError(err, context: "start")
             return nil
         }
-        return bufToData(buf)
+        return stripCountPrefix(buf)
     }
 
     /// Handle an incoming binary message from the server.
@@ -144,24 +166,49 @@ final class SyncPeer {
             return HandleResult(response: nil, hasChanges: false, subscriptions: [])
         }
 
-        var outBuf = sqlpipe_buf()
-        let err = data.withUnsafeBytes { rawBuf -> sqlpipe_error in
-            let ptr = rawBuf.baseAddress?.assumingMemoryBound(to: UInt8.self)
-            return sqlpipe_peer_handle_message(peer, ptr, rawBuf.count, &outBuf)
-        }
-        defer { sqlpipe_free_buf(outBuf) }
+        // The frame may contain multiple concatenated PeerMessages.
+        // Each is [4B LE length][payload...]. Split and handle one at a time.
+        var allResponse = Data()
+        var anyChanges = false
+        var allSubscriptions: [QueryResult] = []
 
-        if err.code != 0 {
-            logError(err, context: "handleMessage")
-            return HandleResult(response: nil, hasChanges: false, subscriptions: [])
+        data.withUnsafeBytes { rawBuf in
+            let bytes = rawBuf.bindMemory(to: UInt8.self)
+            var offset = 0
+
+            while offset + 4 <= bytes.count {
+                let msgLen = Int(bytes[offset]) |
+                             (Int(bytes[offset+1]) << 8) |
+                             (Int(bytes[offset+2]) << 16) |
+                             (Int(bytes[offset+3]) << 24)
+                let total = 4 + msgLen
+                guard offset + total <= bytes.count else { break }
+
+                var outBuf = sqlpipe_buf()
+                let ptr = bytes.baseAddress!.advanced(by: offset)
+                let err = sqlpipe_peer_handle_message(peer, ptr, total, &outBuf)
+
+                if err.code != 0 {
+                    logError(err, context: "handleMessage")
+                } else {
+                    let decoded = decodePeerHandleResult(outBuf)
+                    if let resp = decoded.messages {
+                        allResponse.append(resp)
+                    }
+                    if decoded.changeCount > 0 {
+                        anyChanges = true
+                    }
+                    allSubscriptions.append(contentsOf: decoded.subscriptions)
+                }
+                sqlpipe_free_buf(outBuf)
+                offset += total
+            }
         }
 
-        // Decode PeerHandleResult: [u32 msg_count][pmsgs...][u32 change_count][changes...][u32 sub_count][subs...]
-        let decoded = decodePeerHandleResult(outBuf)
         return HandleResult(
-            response: decoded.messages,
-            hasChanges: decoded.changeCount > 0,
-            subscriptions: decoded.subscriptions
+            response: allResponse.isEmpty ? nil : allResponse,
+            hasChanges: anyChanges,
+            subscriptions: allSubscriptions
         )
     }
 
@@ -175,7 +222,7 @@ final class SyncPeer {
             logError(err, context: "flush")
             return nil
         }
-        return bufToData(buf)
+        return stripCountPrefix(buf)
     }
 
     /// Subscribe to a SQL query. Returns the current result set.
@@ -315,9 +362,9 @@ final class SyncPeer {
 
         var responseData: Data?
         if msgCount > 0 {
-            // Include the count prefix + all message bytes.
-            responseData = Data(bytes: bytes.baseAddress!.advanced(by: msgStart - 4),
-                                count: msgEnd - msgStart + 4)
+            // Send bare concatenated PeerMessages (no count prefix).
+            responseData = Data(bytes: bytes.baseAddress!.advanced(by: msgStart),
+                                count: msgEnd - msgStart)
         }
 
         // Changes — just read the count, skip the encoded change events.
@@ -476,6 +523,13 @@ final class SyncPeer {
     private func bufToData(_ buf: sqlpipe_buf) -> Data? {
         guard let data = buf.data, buf.len > 0 else { return nil }
         return Data(bytes: data, count: buf.len)
+    }
+
+    /// Strip the [u32 count] prefix from a C API buffer that returns
+    /// [u32 count][pmsg1][pmsg2]..., returning just the concatenated messages.
+    private func stripCountPrefix(_ buf: sqlpipe_buf) -> Data? {
+        guard let data = buf.data, buf.len > 4 else { return nil }
+        return Data(bytes: data.advanced(by: 4), count: buf.len - 4)
     }
 
     private func logError(_ err: sqlpipe_error, context: String) {
