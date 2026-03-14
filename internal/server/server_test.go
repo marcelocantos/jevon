@@ -21,7 +21,7 @@ func newTestServer(t *testing.T) (*Server, *jevon.Jevon) {
 	t.Cleanup(func() { database.Close() })
 
 	jev := jevon.New(jevon.Config{WorkDir: t.TempDir()})
-	return New(jev, nil, database, "test-v0.0.1"), jev
+	return New(jev, nil, database, "test-v0.0.1", nil, nil), jev
 }
 
 func TestHealthEndpoint(t *testing.T) {
@@ -78,7 +78,7 @@ func TestTranscriptLoadedOnConstruction(t *testing.T) {
 	database.AppendTranscript("jevon", "hi there")
 
 	jev := jevon.New(jevon.Config{WorkDir: t.TempDir()})
-	s := New(jev, nil, database, "v0")
+	s := New(jev, nil, database, "v0", nil, nil)
 	database.Close()
 
 	if len(s.transcript) != 2 {
@@ -108,7 +108,7 @@ func TestTurnAccumulation(t *testing.T) {
 	t.Cleanup(func() { database.Close() })
 
 	jev := jevon.New(jevon.Config{WorkDir: t.TempDir()})
-	s := New(jev, nil, database, "v0")
+	s := New(jev, nil, database, "v0", nil, nil)
 
 	// Simulate Jevon output callbacks (these are wired in New).
 	// We need to call the callbacks directly since we can't run

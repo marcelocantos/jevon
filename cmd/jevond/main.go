@@ -19,6 +19,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/mcpserver"
 	"github.com/marcelocantos/jevon/internal/qr"
 	"github.com/marcelocantos/jevon/internal/server"
+	"github.com/marcelocantos/jevon/internal/ui"
 )
 
 // jevonCLAUDEMD is the CLAUDE.md template written to Jevon's workdir.
@@ -196,7 +197,23 @@ func main() {
 		}
 	})
 
-	srv := server.New(jev, mgr, database, cli.Version)
+	// Set up Lua view runtime.
+	luaViewsDir := filepath.Join(jevDir, "..", "lua", "views")
+	if err := os.MkdirAll(luaViewsDir, 0o755); err != nil {
+		slog.Error("cannot create lua views dir", "err", err)
+		os.Exit(1)
+	}
+	luaRT, err := ui.NewLuaRuntime(luaViewsDir)
+	if err != nil {
+		slog.Error("cannot create lua runtime", "err", err)
+		os.Exit(1)
+	}
+	defer luaRT.Close()
+
+	vs := ui.NewViewState()
+	vs.SetConnected(cli.Version)
+
+	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
 
 	// Wire MCP server with Jevon event callback.
 	mcpSrv := mcpserver.New(mgr, *workDir, func(workerID, workerName, result string, failed bool) {

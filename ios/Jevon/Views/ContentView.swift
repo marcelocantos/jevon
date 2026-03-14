@@ -5,14 +5,44 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(Connection.self) private var connection
+    @State private var showSheet = false
 
     var body: some View {
+        Group {
+            if let mainView = connection.mainView {
+                // Server-driven UI — render the view tree from jevond.
+                ServerView(node: mainView) { action, value in
+                    connection.sendAction(action, value: value)
+                }
+            } else {
+                // Fallback to purpose-built views.
+                fallbackView
+            }
+        }
+        .onChange(of: connection.sheetView != nil) { _, hasSheet in
+            showSheet = hasSheet
+        }
+        .sheet(isPresented: $showSheet, onDismiss: {
+            // If the user dismisses via swipe, tell the server.
+            if connection.sheetView != nil {
+                connection.sendAction("dismiss_sheet")
+            }
+        }) {
+            if let sheetView = connection.sheetView {
+                ServerView(node: sheetView) { action, value in
+                    connection.sendAction(action, value: value)
+                }
+            }
+        }
+    }
+
+    @ViewBuilder
+    private var fallbackView: some View {
         switch connection.state {
         case .disconnected:
             ConnectView()
         case .connecting:
             if connection.hasConnected {
-                // Reconnecting — keep showing the chat view to avoid flicker.
                 ChatView()
             } else {
                 ProgressView("Connecting...")

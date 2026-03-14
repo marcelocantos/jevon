@@ -10,6 +10,8 @@ enum ServerMessage: Sendable {
     case text(content: String)
     case status(state: ServerState)
     case userMessage(text: String, timestamp: Date)
+    case view(root: ViewNode, slot: String?)
+    case dismiss(slot: String)
     case unknown(type: String)
 
     struct HistoryEntry: Codable, Sendable, Identifiable {
@@ -48,6 +50,12 @@ extension ServerMessage {
         case "user_message":
             let msg = try decoder.decode(UserMessageEcho.self, from: data)
             self = .userMessage(text: msg.text, timestamp: msg.timestamp)
+        case "view":
+            let msg = try decoder.decode(ViewMessage.self, from: data)
+            self = .view(root: msg.root, slot: msg.slot)
+        case "dismiss":
+            let msg = try decoder.decode(DismissMessage.self, from: data)
+            self = .dismiss(slot: msg.slot)
         default:
             self = .unknown(type: envelope.type)
         }

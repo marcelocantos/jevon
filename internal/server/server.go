@@ -16,6 +16,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/db"
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
+	"github.com/marcelocantos/jevon/internal/ui"
 )
 
 // TranscriptEntry is a single turn in the conversation log.
@@ -41,18 +42,23 @@ type Server struct {
 	remotes    map[*websocket.Conn]remoteConn
 	transcript []TranscriptEntry
 	turnBuf    string // accumulates Jevon text for current turn
+
+	luaRT     *ui.LuaRuntime
+	viewState *ui.ViewState
 }
 
-// New creates a Server with the given Jevon instance, manager, database, and version string.
-// It loads any existing transcript from the database and wires Jevon
-// callbacks for broadcasting to all connected clients.
-func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string) *Server {
+// New creates a Server with the given Jevon instance, manager, database, version string,
+// Lua runtime, and view state. The Lua runtime and view state may be nil if the
+// server-driven UI is not yet active.
+func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string, luaRT *ui.LuaRuntime, vs *ui.ViewState) *Server {
 	s := &Server{
-		jevon:   jev,
-		mgr:     mgr,
-		db:      database,
-		version: version,
-		remotes: make(map[*websocket.Conn]remoteConn),
+		jevon:     jev,
+		mgr:       mgr,
+		db:        database,
+		version:   version,
+		remotes:   make(map[*websocket.Conn]remoteConn),
+		luaRT:     luaRT,
+		viewState: vs,
 	}
 
 	// Load persisted transcript.
@@ -68,6 +74,14 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 		}
 		if len(s.transcript) > 0 {
 			slog.Info("loaded transcript from database", "entries", len(s.transcript))
+		}
+
+		// Populate view state with persisted transcript.
+		if vs != nil {
+			for _, e := range entries {
+				vs.AddMessage(e.Role, e.Text)
+			}
+			vs.SetConnected(version)
 		}
 	}
 
@@ -86,6 +100,11 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"type":    "text",
 			"content": text,
 		})
+
+		if s.viewState != nil {
+			s.viewState.UpdateStreamingText(text)
+			s.pushView()
+		}
 	})
 	jev.SetStatus(func(state string) {
 		if state == "idle" {
@@ -106,12 +125,21 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 					slog.Error("failed to persist jevon turn", "err", err)
 				}
 			}
+
+			if s.viewState != nil {
+				s.viewState.FlushStreaming()
+			}
 		}
 
 		s.broadcast(map[string]any{
 			"type":  "status",
 			"state": state,
 		})
+
+		if s.viewState != nil {
+			s.viewState.SetStatus(state)
+			s.pushView()
+		}
 	})
 
 	return s
@@ -181,6 +209,9 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
+	// Send server-driven UI view tree.
+	s.pushView()
+
 	// Read loop: process messages from remote.
 	for {
 		mt, data, err := conn.Read(ctx)
@@ -195,8 +226,10 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		}
 
 		var msg struct {
-			Type string `json:"type"`
-			Text string `json:"text,omitempty"`
+			Type   string `json:"type"`
+			Text   string `json:"text,omitempty"`
+			Action string `json:"action,omitempty"`
+			Value  string `json:"value,omitempty"`
 		}
 		if err := json.Unmarshal(data, &msg); err != nil {
 			continue
@@ -204,31 +237,10 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 
 		switch msg.Type {
 		case "message":
-			if msg.Text != "" {
-				s.mu.Lock()
-				now := time.Now()
-				s.transcript = append(s.transcript, TranscriptEntry{
-					Role:      "user",
-					Text:      msg.Text,
-					Timestamp: now,
-				})
-				s.mu.Unlock()
+			s.handleUserMessage(msg.Text)
 
-				if err := s.db.AppendTranscript("user", msg.Text); err != nil {
-					slog.Error("failed to persist user message", "err", err)
-				}
-
-				s.broadcast(map[string]any{
-					"type":      "user_message",
-					"text":      msg.Text,
-					"timestamp": now,
-				})
-
-				s.jevon.Enqueue(jevon.Event{
-					Kind: jevon.EventUserMessage,
-					Text: msg.Text,
-				})
-			}
+		case "action":
+			s.handleAction(msg.Action, msg.Value)
 		}
 	}
 }
@@ -293,6 +305,138 @@ func (s *Server) handleKillSession(w http.ResponseWriter, r *http.Request) {
 	}
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(map[string]any{"ok": true})
+}
+
+// handleUserMessage processes a text message from a remote client.
+func (s *Server) handleUserMessage(text string) {
+	if text == "" {
+		return
+	}
+
+	s.mu.Lock()
+	now := time.Now()
+	s.transcript = append(s.transcript, TranscriptEntry{
+		Role:      "user",
+		Text:      text,
+		Timestamp: now,
+	})
+	s.mu.Unlock()
+
+	if err := s.db.AppendTranscript("user", text); err != nil {
+		slog.Error("failed to persist user message", "err", err)
+	}
+
+	s.broadcast(map[string]any{
+		"type":      "user_message",
+		"text":      text,
+		"timestamp": now,
+	})
+
+	if s.viewState != nil {
+		s.viewState.AddMessage("user", text)
+		s.pushView()
+	}
+
+	s.jevon.Enqueue(jevon.Event{
+		Kind: jevon.EventUserMessage,
+		Text: text,
+	})
+}
+
+// handleAction processes a UI action from a remote client.
+func (s *Server) handleAction(action, value string) {
+	if action == "" {
+		return
+	}
+	slog.Debug("action received", "action", action, "value", value)
+
+	switch {
+	case action == "send_message":
+		s.handleUserMessage(value)
+
+	case action == "show_sessions":
+		if s.viewState != nil {
+			// Refresh session list before showing.
+			s.refreshSessions()
+			s.viewState.SetSheet("sessions")
+			s.pushView()
+		}
+
+	case action == "dismiss_sheet":
+		if s.viewState != nil {
+			s.viewState.SetSheet("")
+			s.broadcastDismiss("sheet")
+		}
+
+	case action == "disconnect":
+		slog.Info("disconnect requested via action")
+
+	case len(action) > 13 && action[:13] == "kill_session:":
+		sessionID := action[13:]
+		if err := s.mgr.Kill(sessionID); err != nil {
+			slog.Warn("kill session failed", "id", sessionID, "err", err)
+		} else {
+			s.refreshSessions()
+			s.pushView()
+		}
+
+	case action == "reload_views":
+		if s.luaRT != nil {
+			if err := s.luaRT.Reload(); err != nil {
+				slog.Error("lua reload failed", "err", err)
+			} else {
+				s.pushView()
+			}
+		}
+
+	default:
+		slog.Warn("unknown action", "action", action)
+	}
+}
+
+// pushView renders the current view state via Lua and broadcasts to all clients.
+func (s *Server) pushView() {
+	if s.luaRT == nil || s.viewState == nil {
+		return
+	}
+
+	msgs, err := s.viewState.Render(s.luaRT)
+	if err != nil {
+		slog.Error("view render failed", "err", err)
+		return
+	}
+
+	slog.Debug("pushView", "messages", len(msgs), "clients", len(s.remotes))
+	for _, msg := range msgs {
+		s.broadcast(msg)
+	}
+}
+
+// refreshSessions fetches the current session list and updates the view state.
+func (s *Server) refreshSessions() {
+	if s.viewState == nil {
+		return
+	}
+	summaries := s.mgr.List(false)
+	entries := make([]ui.SessionEntry, len(summaries))
+	for i, sum := range summaries {
+		entries[i] = ui.SessionEntry{
+			ID:      sum.ID,
+			Name:    sum.Name,
+			Status:  string(sum.Status),
+			WorkDir: sum.WorkDir,
+			Active:  sum.Active,
+		}
+	}
+	s.viewState.SetSessions(entries)
+}
+
+// broadcastDismiss sends a dismiss message for the given slot.
+func (s *Server) broadcastDismiss(slot string) {
+	s.broadcast(ui.DismissMessage{
+		Type: "dismiss",
+		Slot: slot,
+	})
 }
 
 // writeJSON sends a JSON message to a single connection.

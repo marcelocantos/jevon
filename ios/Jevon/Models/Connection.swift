@@ -24,6 +24,11 @@ final class Connection {
     /// True once a successful connection has been established at least once.
     private(set) var hasConnected: Bool = false
 
+    /// Server-driven UI: main screen view tree.
+    private(set) var mainView: ViewNode?
+    /// Server-driven UI: modal sheet view tree.
+    private(set) var sheetView: ViewNode?
+
     /// Text being streamed from the current Jevon response.
     private var streamingText: String = ""
 
@@ -67,6 +72,23 @@ final class Connection {
         let msg = ClientMessage.message(text)
         guard let data = try? JSONEncoder().encode(msg) else { return }
         let string = String(data: data, encoding: .utf8) ?? ""
+
+        webSocket.send(.string(string)) { [weak self] error in
+            if let error {
+                Task { @MainActor [weak self] in
+                    self?.state = .error(error.localizedDescription)
+                }
+            }
+        }
+    }
+
+    /// Send an action back to the server (from server-driven UI interactions).
+    func sendAction(_ action: String, value: String = "") {
+        guard let webSocket else { return }
+
+        let msg = ActionMessage(type: "action", action: action, value: value.isEmpty ? nil : value)
+        guard let data = try? JSONEncoder().encode(msg),
+              let string = String(data: data, encoding: .utf8) else { return }
 
         webSocket.send(.string(string)) { [weak self] error in
             if let error {
@@ -186,6 +208,18 @@ final class Connection {
             // Only add if we didn't already add it locally.
             if messages.last?.role != .user || messages.last?.text != text {
                 messages.append(ChatMessage(role: .user, text: text, timestamp: timestamp))
+            }
+
+        case .view(let root, let slot):
+            if slot == "sheet" {
+                sheetView = root
+            } else {
+                mainView = root
+            }
+
+        case .dismiss(let slot):
+            if slot == "sheet" {
+                sheetView = nil
             }
 
         case .unknown:

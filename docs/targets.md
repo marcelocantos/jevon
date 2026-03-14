@@ -168,6 +168,51 @@ and system performance analysis.
 - Dashboard analytics views.
 - Foundation data for haiku introduction decision.
 
+### 🎯T9 Server-driven UI for mobile app
+
+- **Value**: 13
+- **Cost**: 13
+- **Weight**: 1.0 (value 13 / cost 13)
+- **Tags**: visual
+- **Status**: identified
+- **Discovered**: 2026-03-14
+
+**Desired state:** The iOS app is a thin generic renderer. jevond builds
+view trees from Lua scripts and sends them as JSON over WebSocket; the
+client maps them to native SwiftUI. Jevon (the AI agent) can modify Lua
+scripts at runtime to reshape the UI without app rebuilds.
+
+**Architecture:**
+- **Primitives, not components.** View schema has fine-grained primitives
+  (text, vstack, hstack, spacer, image, padding, background, etc.) — no
+  domain-specific components. "Chat bubble" is a composition of primitives
+  defined in Lua, not a hardcoded client component.
+- **Lua view scripts.** View-building logic lives in Lua scripts loaded
+  by jevond via gopher-lua. Scripts receive app state and return view
+  trees. jevond hot-reloads scripts on change.
+- **Inline assets.** Images via SF Symbols (by name), data URIs (inline
+  SVG/PNG), or bundled assets. Jevon can send novel icons without app
+  bundling.
+- **Server-defined templates.** Lua functions act as reusable component
+  templates. Jevon defines and modifies them conversationally.
+- **Reserved: `embed` component** for future ge wire protocol integration
+  (game content rendered inline within server-driven UI).
+
+**Acceptance criteria:**
+- Primitive-based view schema defined: text, vstack, hstack, zstack,
+  spacer, scroll, list, image, button, text_field, nav, toolbar, sheet,
+  background, padding, swipe_action, tap, badge, progress.
+- gopher-lua embedded in jevond. Lua scripts in `lua/views/` build view
+  trees for all screens (connect, chat, session list, session detail).
+- jevond hot-reloads Lua scripts on file change (fsnotify or signal).
+- iOS app has a generic recursive renderer mapping JSON nodes → SwiftUI.
+  No business logic in Swift.
+- Client sends action messages (taps, swipes, text submit) back to server.
+  Server processes actions in Lua, pushes updated view trees.
+- Smoke test: path abbreviation (~/home, GitHub logos) is deliberately
+  NOT implemented in the initial Lua scripts. Jevon writes it via
+  conversation to prove the architecture works end-to-end.
+
 ### 🎯T7 Mobile app for Jevon
 
 - **Value**: 20
