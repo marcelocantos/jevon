@@ -268,6 +268,13 @@ pure sqlpipe transport.
 - **Lua state from queries.** Instead of a manually-built state dict,
   Lua screen functions receive query results directly from the
   replica's subscribed queries.
+- **Local query + subscribe in Lua.** Lua scripts call `query(sql)`
+  to read the local replica directly and `subscribe(sql)` to declare
+  data dependencies. When subscribed queries' underlying tables change
+  (via incoming sqlpipe changesets), the screen auto-re-renders. No
+  polling, no manual refresh, no `push_sessions()` action. Data flow:
+  changeset arrives → subscribed queries re-evaluate → Lua runs →
+  SwiftUI renders.
 
 **Integration:**
 - sqlpipe Go wrapper (`go/sqlpipe/`) for jevond
