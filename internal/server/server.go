@@ -209,8 +209,20 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		})
 	}
 
-	// Send server-driven UI view tree.
-	s.PushView()
+	// Send Lua view scripts for client-side rendering (preferred),
+	// or fall back to server-rendered view trees.
+	if s.luaRT != nil {
+		if source, err := s.luaRT.Scripts(); err != nil {
+			slog.Error("failed to read lua scripts", "err", err)
+		} else if source != "" {
+			s.writeJSON(conn, ctx, map[string]any{
+				"type":   "scripts",
+				"source": source,
+			})
+		}
+	} else {
+		s.PushView()
+	}
 
 	// Read loop: process messages from remote.
 	for {
@@ -355,14 +367,11 @@ func (s *Server) handleAction(action, value string) {
 		s.handleUserMessage(value)
 
 	case action == "show_sessions":
-		if s.viewState != nil {
-			// Refresh session list before showing.
-			s.refreshSessions()
-			s.viewState.SetSheet("sessions")
-			s.PushView()
-		}
+		s.pushSessions()
 
 	case action == "dismiss_sheet":
+		// Client handles dismiss locally when using client-side Lua.
+		// Still support server-side fallback.
 		if s.viewState != nil {
 			s.viewState.SetSheet("")
 			s.broadcastDismiss("sheet")
@@ -376,8 +385,7 @@ func (s *Server) handleAction(action, value string) {
 		if err := s.mgr.Kill(sessionID); err != nil {
 			slog.Warn("kill session failed", "id", sessionID, "err", err)
 		} else {
-			s.refreshSessions()
-			s.PushView()
+			s.pushSessions()
 		}
 
 	case action == "reload_views":
@@ -385,7 +393,7 @@ func (s *Server) handleAction(action, value string) {
 			if err := s.luaRT.Reload(); err != nil {
 				slog.Error("lua reload failed", "err", err)
 			} else {
-				s.PushView()
+				s.PushScripts()
 			}
 		}
 
@@ -410,6 +418,51 @@ func (s *Server) PushView() {
 	for _, msg := range msgs {
 		s.broadcast(msg)
 	}
+}
+
+// PushScripts broadcasts the Lua source to all connected clients for client-side rendering.
+func (s *Server) PushScripts() {
+	if s.luaRT == nil {
+		return
+	}
+	source, err := s.luaRT.Scripts()
+	if err != nil {
+		slog.Error("failed to read lua scripts", "err", err)
+		return
+	}
+	if source == "" {
+		return
+	}
+	s.broadcast(map[string]any{
+		"type":   "scripts",
+		"source": source,
+	})
+}
+
+// pushSessions fetches the current session list and broadcasts it to all clients.
+func (s *Server) pushSessions() {
+	summaries := s.mgr.List(false)
+	type sessionJSON struct {
+		ID      string `json:"id"`
+		Name    string `json:"name"`
+		Status  string `json:"status"`
+		WorkDir string `json:"workdir"`
+		Active  bool   `json:"active"`
+	}
+	entries := make([]sessionJSON, len(summaries))
+	for i, sum := range summaries {
+		entries[i] = sessionJSON{
+			ID:      sum.ID,
+			Name:    sum.Name,
+			Status:  string(sum.Status),
+			WorkDir: sum.WorkDir,
+			Active:  sum.Active,
+		}
+	}
+	s.broadcast(map[string]any{
+		"type":     "sessions",
+		"sessions": entries,
+	})
 }
 
 // refreshSessions fetches the current session list and updates the view state.

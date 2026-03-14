@@ -10,9 +10,19 @@ enum ServerMessage: Sendable {
     case text(content: String)
     case status(state: ServerState)
     case userMessage(text: String, timestamp: Date)
+    case scripts(source: String)
+    case sessions(entries: [SessionEntry])
     case view(root: ViewNode, slot: String?)
     case dismiss(slot: String)
     case unknown(type: String)
+
+    struct SessionEntry: Codable, Sendable {
+        let id: String
+        let name: String
+        let status: String
+        let workdir: String
+        let active: Bool
+    }
 
     struct HistoryEntry: Codable, Sendable, Identifiable {
         let role: String
@@ -50,6 +60,12 @@ extension ServerMessage {
         case "user_message":
             let msg = try decoder.decode(UserMessageEcho.self, from: data)
             self = .userMessage(text: msg.text, timestamp: msg.timestamp)
+        case "scripts":
+            let msg = try decoder.decode(ScriptsMessage.self, from: data)
+            self = .scripts(source: msg.source)
+        case "sessions":
+            let msg = try decoder.decode(SessionsMessage.self, from: data)
+            self = .sessions(entries: msg.sessions)
         case "view":
             let msg = try decoder.decode(ViewMessage.self, from: data)
             self = .view(root: msg.root, slot: msg.slot)
@@ -84,6 +100,14 @@ extension ServerMessage {
     private struct UserMessageEcho: Codable {
         let text: String
         let timestamp: Date
+    }
+
+    private struct ScriptsMessage: Codable {
+        let source: String
+    }
+
+    private struct SessionsMessage: Codable {
+        let sessions: [SessionEntry]
     }
 }
 

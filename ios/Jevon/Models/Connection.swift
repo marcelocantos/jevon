@@ -32,6 +32,17 @@ final class Connection {
     /// Text being streamed from the current Jevon response.
     private var streamingText: String = ""
 
+    // MARK: - Client-side Lua rendering
+
+    /// Lua runtime for client-side view rendering. Created when scripts arrive.
+    private var luaRuntime: LuaRuntime?
+    /// Cached session list from the server.
+    private var sessions: [ServerMessage.SessionEntry] = []
+    /// Currently active sheet (empty = none, "sessions" = session list).
+    private var activeSheet: String = ""
+    /// Server version string, extracted from init message.
+    private var serverVersion: String = ""
+
     private var webSocket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
     private var reconnectTask: Task<Void, Never>?
@@ -61,11 +72,15 @@ final class Connection {
         state = .disconnected
         hasConnected = false
         reconnectDelay = 1.0
+        luaRuntime = nil
+        sessions = []
+        activeSheet = ""
     }
 
     func send(_ text: String) {
         // Add locally immediately for responsiveness.
         messages.append(ChatMessage(role: .user, text: text))
+        renderViews()
 
         guard let webSocket else { return }
 
@@ -84,19 +99,25 @@ final class Connection {
 
     /// Send an action back to the server (from server-driven UI interactions).
     func sendAction(_ action: String, value: String = "") {
-        guard let webSocket else { return }
+        // Handle some actions locally when Lua scripts are loaded.
+        if luaRuntime != nil {
+            switch action {
+            case "show_sessions":
+                // Ask the server for fresh session data, then show the sheet.
+                sendToServer(action: action, value: value)
+                return
 
-        let msg = ActionMessage(type: "action", action: action, value: value.isEmpty ? nil : value)
-        guard let data = try? JSONEncoder().encode(msg),
-              let string = String(data: data, encoding: .utf8) else { return }
+            case "dismiss_sheet":
+                activeSheet = ""
+                renderViews()
+                return
 
-        webSocket.send(.string(string)) { [weak self] error in
-            if let error {
-                Task { @MainActor [weak self] in
-                    self?.state = .error(error.localizedDescription)
-                }
+            default:
+                break
             }
         }
+
+        sendToServer(action: action, value: value)
     }
 
     /// Base HTTP URL derived from the WebSocket connection URL.
@@ -124,6 +145,22 @@ final class Connection {
     }
 
     // MARK: - Internal
+
+    private func sendToServer(action: String, value: String) {
+        guard let webSocket else { return }
+
+        let msg = ActionMessage(type: "action", action: action, value: value.isEmpty ? nil : value)
+        guard let data = try? JSONEncoder().encode(msg),
+              let string = String(data: data, encoding: .utf8) else { return }
+
+        webSocket.send(.string(string)) { [weak self] error in
+            if let error {
+                Task { @MainActor [weak self] in
+                    self?.state = .error(error.localizedDescription)
+                }
+            }
+        }
+    }
 
     private func doConnect(url: URL) {
         state = .connecting
@@ -180,7 +217,9 @@ final class Connection {
         switch msg {
         case .serverInit(let version):
             state = .connected(version: version)
+            serverVersion = version
             hasConnected = true
+            renderViews()
 
         case .history(let entries):
             messages = entries.map { entry in
@@ -190,6 +229,7 @@ final class Connection {
                     timestamp: entry.timestamp
                 )
             }
+            renderViews()
 
         case .text(let content):
             streamingText += content
@@ -197,35 +237,128 @@ final class Connection {
                 serverState = .thinking
             }
             updateOrAppendStreamingMessage()
+            renderViews()
 
         case .status(let newState):
             serverState = newState
             if newState == .idle {
                 flushStreaming()
             }
+            renderViews()
 
         case .userMessage(let text, let timestamp):
             // Only add if we didn't already add it locally.
             if messages.last?.role != .user || messages.last?.text != text {
                 messages.append(ChatMessage(role: .user, text: text, timestamp: timestamp))
             }
+            renderViews()
+
+        case .scripts(let source):
+            loadScripts(source)
+
+        case .sessions(let entries):
+            sessions = entries
+            activeSheet = "sessions"
+            renderViews()
 
         case .view(let root, let slot):
-            if slot == "sheet" {
-                sheetView = root
-            } else {
-                mainView = root
+            // Fallback: accept server-rendered views if no Lua scripts loaded.
+            if luaRuntime == nil {
+                if slot == "sheet" {
+                    sheetView = root
+                } else {
+                    mainView = root
+                }
             }
 
         case .dismiss(let slot):
-            if slot == "sheet" {
-                sheetView = nil
+            if luaRuntime == nil {
+                if slot == "sheet" {
+                    sheetView = nil
+                }
             }
 
         case .unknown:
             break
         }
     }
+
+    // MARK: - Client-side Lua rendering
+
+    private func loadScripts(_ source: String) {
+        let runtime = LuaRuntime()
+        if runtime.loadScript(source) {
+            luaRuntime = runtime
+            logger.info("Lua scripts loaded for client-side rendering")
+            renderViews()
+        } else {
+            logger.error("Failed to load Lua scripts — falling back to server rendering")
+        }
+    }
+
+    /// Re-render views using local Lua scripts and current state.
+    private func renderViews() {
+        guard let luaRuntime else { return }
+
+        let state = buildLuaState()
+
+        // Determine main screen.
+        let isConnected: Bool
+        switch self.state {
+        case .connected: isConnected = true
+        default: isConnected = false
+        }
+        let screenName = isConnected ? "chat_screen" : "connect_screen"
+
+        mainView = luaRuntime.callScreen(screenName, state: state)
+
+        // Render sheet if active.
+        if !activeSheet.isEmpty {
+            let sheetScreen = activeSheet + "_screen"
+            sheetView = luaRuntime.callScreen(sheetScreen, state: state)
+        } else {
+            sheetView = nil
+        }
+    }
+
+    /// Build the state dictionary that Lua screen functions expect.
+    private func buildLuaState() -> [String: Any] {
+        let isConnected: Bool
+        switch state {
+        case .connected: isConnected = true
+        default: isConnected = false
+        }
+
+        let formatter = ISO8601DateFormatter()
+        let msgs: [[String: Any]] = messages.map { msg in
+            [
+                "role": msg.role == .user ? "user" : "jevon",
+                "text": msg.text,
+                "timestamp": formatter.string(from: msg.timestamp),
+            ]
+        }
+
+        let sessEntries: [[String: Any]] = sessions.map { s in
+            [
+                "id": s.id,
+                "name": s.name,
+                "status": s.status,
+                "workdir": s.workdir,
+                "active": s.active,
+            ]
+        }
+
+        return [
+            "connected": isConnected,
+            "version": serverVersion,
+            "status": serverState == .thinking ? "thinking" : "idle",
+            "messages": msgs,
+            "streaming_text": streamingText,
+            "sessions": sessEntries,
+        ]
+    }
+
+    // MARK: - Streaming helpers
 
     private func updateOrAppendStreamingMessage() {
         if let last = messages.last, last.role == .jevon, last.isStreaming {

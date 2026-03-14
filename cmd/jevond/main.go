@@ -231,7 +231,7 @@ func main() {
 		if err := luaRT.Reload(); err != nil {
 			return err
 		}
-		srv.PushView()
+		srv.PushScripts()
 		return nil
 	})
 

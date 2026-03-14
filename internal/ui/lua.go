@@ -78,6 +78,35 @@ func (r *LuaRuntime) Reload() error {
 	return nil
 }
 
+// Scripts reads and concatenates all .lua files from the configured directory,
+// returning the raw source text. This is sent to clients for client-side rendering.
+func (r *LuaRuntime) Scripts() (string, error) {
+	entries, err := os.ReadDir(r.dir)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return "", nil
+		}
+		return "", fmt.Errorf("read lua dir %s: %w", r.dir, err)
+	}
+
+	var buf []byte
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".lua" {
+			continue
+		}
+		path := filepath.Join(r.dir, e.Name())
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return "", fmt.Errorf("read %s: %w", path, err)
+		}
+		if len(buf) > 0 {
+			buf = append(buf, '\n')
+		}
+		buf = append(buf, data...)
+	}
+	return string(buf), nil
+}
+
 // CallScreen calls a named Lua function with the given state and returns the
 // resulting node tree. If the function doesn't exist, it returns a fallback node.
 func (r *LuaRuntime) CallScreen(name string, state map[string]any) (*Node, error) {

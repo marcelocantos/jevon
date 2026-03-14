@@ -16,9 +16,14 @@ targets:
     platform: iOS
     sources:
       - path: Jevon
+      - path: Vendor/lua-5.1.5/src
+        excludes: ["lua.c", "luac.c", "loslib.c", "liolib.c", "loadlib.c", "linit.c"]
+        compilerFlags: "-w"
     settings:
       base:
         INFOPLIST_FILE: Jevon/Info.plist
         PRODUCT_BUNDLE_IDENTIFIER: com.marcelocantos.jevon
         TARGETED_DEVICE_FAMILY: "1,2"
         SWIFT_STRICT_CONCURRENCY: complete
+        SWIFT_OBJC_BRIDGING_HEADER: Jevon/Jevon-Bridging-Header.h
+        HEADER_SEARCH_PATHS: Vendor/lua-5.1.5/src
