@@ -14,6 +14,7 @@ enum ServerMessage: Sendable {
     case sessions(entries: [SessionEntry])
     case view(root: ViewNode, slot: String?)
     case dismiss(slot: String)
+    case notification(title: String, body: String)
     case unknown(type: String)
 
     struct SessionEntry: Codable, Sendable {
@@ -72,6 +73,9 @@ extension ServerMessage {
         case "dismiss":
             let msg = try decoder.decode(DismissMessage.self, from: data)
             self = .dismiss(slot: msg.slot)
+        case "notification":
+            let msg = try decoder.decode(NotificationMessage.self, from: data)
+            self = .notification(title: msg.title, body: msg.body)
         default:
             self = .unknown(type: envelope.type)
         }
@@ -108,6 +112,11 @@ extension ServerMessage {
 
     private struct SessionsMessage: Codable {
         let sessions: [SessionEntry]
+    }
+
+    private struct NotificationMessage: Codable {
+        let title: String
+        let body: String
     }
 }
 

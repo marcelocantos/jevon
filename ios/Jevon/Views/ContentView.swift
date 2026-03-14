@@ -6,6 +6,7 @@ import SwiftUI
 struct ContentView: View {
     @Environment(Connection.self) private var connection
     @State private var showSheet = false
+    @State private var showNotification = false
 
     var body: some View {
         Group {
@@ -34,6 +35,15 @@ struct ContentView: View {
                 }
             }
         }
+        .onChange(of: connection.notificationTitle != nil) { _, hasNotification in
+            showNotification = hasNotification
+        }
+        .alert(
+            connection.notificationTitle ?? "",
+            isPresented: $showNotification,
+            actions: { Button("OK") { connection.dismissNotification() } },
+            message: { Text(connection.notificationBody ?? "") }
+        )
     }
 
     @ViewBuilder

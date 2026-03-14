@@ -29,6 +29,15 @@ final class Connection {
     /// Server-driven UI: modal sheet view tree.
     private(set) var sheetView: ViewNode?
 
+    /// In-app notification alert.
+    private(set) var notificationTitle: String?
+    private(set) var notificationBody: String?
+
+    func dismissNotification() {
+        notificationTitle = nil
+        notificationBody = nil
+    }
+
     /// Text being streamed from the current Jevon response.
     private var streamingText: String = ""
 
@@ -277,6 +286,10 @@ final class Connection {
                     sheetView = nil
                 }
             }
+
+        case .notification(let title, let body):
+            notificationTitle = title
+            notificationBody = body
 
         case .unknown:
             break
