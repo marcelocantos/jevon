@@ -127,11 +127,11 @@ final class Connection {
                 // Add message locally for immediate feedback.
                 messages.append(ChatMessage(role: .user, text: value))
                 renderViews()
-                if syncPeer != nil {
-                    sendRequest(type: action, payload: value)
-                } else {
-                    sendToServer(action: action, value: value)
-                }
+                // Always use JSON path for send_message — the server's
+                // HandleUserMessage writes to sync_transcript, which syncs
+                // back via sqlpipe. The requests table path doesn't trigger
+                // the transcript write.
+                sendToServer(action: action, value: value)
                 return
 
             case "show_sessions":
