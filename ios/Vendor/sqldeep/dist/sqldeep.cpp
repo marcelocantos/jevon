@@ -1429,7 +1429,7 @@ class Renderer {
 public:
     explicit Renderer(const FkIndex* fk_index = nullptr,
                       Backend backend = Backend::sqlite)
-        : fk_index_(fk_index) {
+        : fk_index_(fk_index), backend_(backend) {
         switch (backend) {
         case Backend::postgres:
             fn_object_      = "jsonb_build_object";
@@ -1465,6 +1465,8 @@ private:
                     render_array(*v, out);
                 } else if constexpr (std::is_same_v<T, std::unique_ptr<JoinPath>>) {
                     render_join_path(*v, out);
+                } else if constexpr (std::is_same_v<T, std::unique_ptr<RecursiveSelect>>) {
+                    render_recursive_select(*v, out);
                 }
             }, part);
         }
@@ -1625,7 +1627,122 @@ private:
         }
     }
 
+    void render_recursive_select(const RecursiveSelect& rs, std::string& out) {
+        bool is_pg = (backend_ == Backend::postgres);
+
+        // Build json_object(...) argument list for non-recursive fields
+        std::string obj_args;
+        std::string col_list;    // column names for CTE
+        std::string col_select;  // column references with c. prefix for recursive step
+        for (size_t i = 0; i < rs.fields.size(); ++i) {
+            const auto& f = rs.fields[i];
+            std::string col = f.value.empty() ? f.key : f.key; // column name
+            std::string expr;
+            if (f.value.empty()) {
+                expr = f.key; // bare field
+            } else {
+                // For renamed fields, the value is the SQL expression
+                std::string val_str;
+                // Render the value parts to a string
+                Renderer tmp(fk_index_, backend_);
+                val_str = tmp.render_document(f.value);
+                expr = val_str;
+                col = val_str; // use the expression as the column name
+            }
+            if (i > 0) { col_list += ", "; col_select += ", "; }
+            col_list += col;
+            col_select += "c." + col;
+
+            if (i > 0) obj_args += ", ";
+            obj_args += "'";
+            obj_args += sql_escape_key(f.key);
+            obj_args += "', ";
+            obj_args += col;
+        }
+
+        // Add FK and PK columns to CTE column list
+        col_list += ", " + rs.fk_column;
+        col_select += ", c." + rs.fk_column;
+        if (rs.pk_column != rs.fk_column) {
+            // PK might already be in the field list
+            bool pk_in_fields = false;
+            for (const auto& f : rs.fields) {
+                std::string col = f.value.empty() ? f.key : f.key;
+                if (f.value.empty() && f.key == rs.pk_column) { pk_in_fields = true; break; }
+            }
+            if (!pk_in_fields) {
+                col_list += ", " + rs.pk_column;
+                col_select += ", c." + rs.pk_column;
+            }
+        }
+
+        std::string pad_fn = is_pg
+            ? "lpad(CAST(" + rs.pk_column + " AS text), 10, '0')"
+            : "printf('%010d', " + rs.pk_column + ")";
+        std::string c_pad_fn = is_pg
+            ? "lpad(CAST(c." + rs.pk_column + " AS text), 10, '0')"
+            : "printf('%010d', c." + rs.pk_column + ")";
+        std::string high_char = is_pg ? "chr(127)" : "char(127)";
+        std::string concat_fn_open = is_pg
+            ? "string_agg(_fragment, '' ORDER BY _sort_key)"
+            : "group_concat(_fragment, '')";
+
+        // Emit the 3-CTE bracket-injection template
+        out += "WITH RECURSIVE _sdq_dfs(";
+        out += col_list;
+        out += ", _depth, _path) AS (SELECT ";
+        out += col_list;
+        out += ", 0, ";
+        out += pad_fn;
+        out += " FROM ";
+        out += rs.table;
+        if (!rs.root_condition.empty()) {
+            out += " WHERE ";
+            render_parts(rs.root_condition, out, /*nested=*/false);
+        }
+        out += " UNION ALL SELECT ";
+        out += col_select;
+        out += ", d._depth + 1, d._path || '/' || ";
+        out += c_pad_fn;
+        out += " FROM ";
+        out += rs.table;
+        out += " c JOIN _sdq_dfs d ON c.";
+        out += rs.fk_column;
+        out += " = d.";
+        out += rs.pk_column;
+        out += "), _sdq_ranked AS (SELECT *, ";
+        out += fn_object_;
+        out += "(";
+        out += obj_args;
+        out += ") AS _obj, ROW_NUMBER() OVER (PARTITION BY ";
+        out += rs.fk_column;
+        out += " ORDER BY ";
+        out += rs.pk_column;
+        out += ") AS _child_rank FROM _sdq_dfs), ";
+        out += "_sdq_events(_sort_key, _fragment) AS (SELECT _path, ";
+        out += "CASE WHEN _child_rank > 1 THEN ',' ELSE '' END || ";
+        out += "substr(_obj, 1, length(_obj) - 1) || ',\"";
+        out += sql_escape_key(rs.children_field);
+        out += "\":[' FROM _sdq_ranked UNION ALL SELECT _path || ";
+        out += high_char;
+        out += ", ']}' FROM _sdq_ranked) SELECT ";
+
+        if (!rs.singular) {
+            out += "'[' || ";
+        }
+        if (is_pg) {
+            out += concat_fn_open;
+        } else {
+            out += "group_concat(_fragment, '')";
+        }
+        if (!rs.singular) {
+            out += " || ']'";
+        }
+        out += " FROM (SELECT _fragment FROM _sdq_events ORDER BY _sort_key)";
+    }
+
     const FkIndex* fk_index_;
+    Backend backend_;
     const char* fn_object_;
     const char* fn_array_;
     const char* fn_group_array_;
