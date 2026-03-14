@@ -9,7 +9,10 @@ import (
 	"os"
 	"os/signal"
 	"path/filepath"
+	"strings"
+	"sync"
 	"syscall"
+	"time"
 
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
@@ -20,6 +23,7 @@ import (
 	"github.com/marcelocantos/jevon/internal/qr"
 	"github.com/marcelocantos/jevon/internal/server"
 	"github.com/marcelocantos/jevon/internal/session"
+	"github.com/marcelocantos/jevon/internal/transcript"
 	"github.com/marcelocantos/jevon/internal/ui"
 )
 
@@ -216,6 +220,46 @@ func main() {
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
 
+	// Transcript reader for Lua access to Claude session transcripts.
+	transcriptReader := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+
+	// Timer state — named timers that fire actions through the Lua runtime.
+	var (
+		timersMu sync.Mutex
+		timers   = make(map[string]func()) // name → cancel func
+	)
+	cancelTimer := func(name string) {
+		timersMu.Lock()
+		defer timersMu.Unlock()
+		if cancel, ok := timers[name]; ok {
+			cancel()
+			delete(timers, name)
+		}
+	}
+
+	// File I/O sandbox root.
+	sandboxRoot := filepath.Join(homeDir, ".jevon")
+
+	// validateSandbox ensures a path is under ~/.jevon/.
+	validateSandbox := func(path string) (string, error) {
+		abs, err := filepath.Abs(path)
+		if err != nil {
+			return "", fmt.Errorf("invalid path: %w", err)
+		}
+		// Resolve symlinks to prevent escaping via symlink.
+		real, err := filepath.EvalSymlinks(filepath.Dir(abs))
+		if err != nil {
+			// Dir doesn't exist yet — check the parent chain.
+			real = abs
+		} else {
+			real = filepath.Join(real, filepath.Base(abs))
+		}
+		if !strings.HasPrefix(real, sandboxRoot) {
+			return "", fmt.Errorf("path %q is outside sandbox %q", path, sandboxRoot)
+		}
+		return abs, nil
+	}
+
 	// Register Lua capabilities — Go functions callable from Lua action handlers.
 	luaRT.RegisterCapabilities(ui.Capabilities{
 		JevonEnqueue: func(text string) {
@@ -295,6 +339,100 @@ func main() {
 		},
 		Broadcast: func(msg map[string]any) {
 			srv.Broadcast(msg)
+		},
+
+		// Transcript access.
+		TranscriptRead: func(sessionID string) ([]map[string]any, error) {
+			return transcriptReader.Read(sessionID)
+		},
+		TranscriptTruncate: func(sessionID string, keepTurns int) error {
+			return transcriptReader.Truncate(sessionID, keepTurns)
+		},
+		TranscriptFork: func(sessionID string, keepTurns int) (string, error) {
+			return transcriptReader.Fork(sessionID, keepTurns)
+		},
+
+		// File I/O (sandboxed to ~/.jevon/).
+		FileRead: func(path string) (string, error) {
+			abs, err := validateSandbox(path)
+			if err != nil {
+				return "", err
+			}
+			data, err := os.ReadFile(abs)
+			if err != nil {
+				return "", err
+			}
+			return string(data), nil
+		},
+		FileWrite: func(path, content string) error {
+			abs, err := validateSandbox(path)
+			if err != nil {
+				return err
+			}
+			if err := os.MkdirAll(filepath.Dir(abs), 0o755); err != nil {
+				return err
+			}
+			return os.WriteFile(abs, []byte(content), 0o644)
+		},
+		FileList: func(dir string) ([]string, error) {
+			abs, err := validateSandbox(dir)
+			if err != nil {
+				return nil, err
+			}
+			entries, err := os.ReadDir(abs)
+			if err != nil {
+				return nil, err
+			}
+			names := make([]string, len(entries))
+			for i, e := range entries {
+				names[i] = e.Name()
+			}
+			return names, nil
+		},
+
+		// Timers.
+		SetTimeout: func(name string, delayMs int, action string) {
+			cancelTimer(name)
+			timer := time.AfterFunc(time.Duration(delayMs)*time.Millisecond, func() {
+				slog.Debug("timer fired", "name", name, "action", action)
+				timersMu.Lock()
+				delete(timers, name)
+				timersMu.Unlock()
+				srv.HandleAction(action, "")
+			})
+			timersMu.Lock()
+			timers[name] = func() { timer.Stop() }
+			timersMu.Unlock()
+		},
+		SetInterval: func(name string, intervalMs int, action string) {
+			cancelTimer(name)
+			ticker := time.NewTicker(time.Duration(intervalMs) * time.Millisecond)
+			done := make(chan struct{})
+			go func() {
+				for {
+					select {
+					case <-ticker.C:
+						slog.Debug("interval fired", "name", name, "action", action)
+						srv.HandleAction(action, "")
+					case <-done:
+						ticker.Stop()
+						return
+					}
+				}
+			}()
+			timersMu.Lock()
+			timers[name] = func() { close(done) }
+			timersMu.Unlock()
+		},
+		CancelTimer: cancelTimer,
+
+		// Notifications.
+		Notify: func(title, body string) {
+			srv.Broadcast(map[string]any{
+				"type":  "notification",
+				"title": title,
+				"body":  body,
+			})
 		},
 	})
 

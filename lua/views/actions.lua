@@ -25,5 +25,16 @@ function handle_action(action, value)
         push_scripts()
     elseif action == "reset_session" then
         db_set("jevon_claude_id", "")
+    elseif action == "rewind_session" then
+        local claude_id = db_get("jevon_claude_id")
+        if claude_id ~= "" then
+            local err = transcript_truncate(claude_id, 0)
+            if err then
+                notify("Rewind Failed", err)
+            else
+                db_set("jevon_claude_id", "")
+                notify("Session Rewound", "Jevon will start fresh on next message.")
+            end
+        end
     end
 end

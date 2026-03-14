@@ -26,6 +26,24 @@ type Capabilities struct {
 	PushSessions  func()
 	PushScripts   func()
 	Broadcast     func(msg map[string]any)
+
+	// Transcript access — read, truncate, and fork Claude session transcripts.
+	TranscriptRead     func(sessionID string) ([]map[string]any, error)
+	TranscriptTruncate func(sessionID string, keepTurns int) error
+	TranscriptFork     func(sessionID string, keepTurns int) (string, error)
+
+	// File I/O — sandboxed to ~/.jevon/.
+	FileRead  func(path string) (string, error)
+	FileWrite func(path, content string) error
+	FileList  func(dir string) ([]string, error)
+
+	// Timers — named timers that fire actions.
+	SetTimeout  func(name string, delayMs int, action string)
+	SetInterval func(name string, intervalMs int, action string)
+	CancelTimer func(name string)
+
+	// Notifications — push to connected clients.
+	Notify func(title, body string)
 }
 
 // LuaRuntime loads and executes Lua view scripts that build UI node trees.
@@ -157,6 +175,127 @@ func (r *LuaRuntime) registerCaps() {
 		caps.Broadcast(msg)
 		return 0
 	}))
+
+	// --- Transcript access ---
+
+	if caps.TranscriptRead != nil {
+		L.SetGlobal("transcript_read", L.NewFunction(func(L *lua.LState) int {
+			id := L.CheckString(1)
+			turns, err := caps.TranscriptRead(id)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			t := L.NewTable()
+			for _, turn := range turns {
+				t.Append(goToLua(L, turn))
+			}
+			L.Push(t)
+			return 1
+		}))
+	}
+
+	if caps.TranscriptTruncate != nil {
+		L.SetGlobal("transcript_truncate", L.NewFunction(func(L *lua.LState) int {
+			id := L.CheckString(1)
+			keepTurns := L.CheckInt(2)
+			if err := caps.TranscriptTruncate(id, keepTurns); err != nil {
+				L.Push(lua.LString(err.Error()))
+				return 1
+			}
+			return 0
+		}))
+	}
+
+	if caps.TranscriptFork != nil {
+		L.SetGlobal("transcript_fork", L.NewFunction(func(L *lua.LState) int {
+			id := L.CheckString(1)
+			keepTurns := L.CheckInt(2)
+			newID, err := caps.TranscriptFork(id, keepTurns)
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(newID))
+			return 1
+		}))
+	}
+
+	// --- File I/O ---
+
+	if caps.FileRead != nil {
+		L.SetGlobal("file_read", L.NewFunction(func(L *lua.LState) int {
+			content, err := caps.FileRead(L.CheckString(1))
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			L.Push(lua.LString(content))
+			return 1
+		}))
+	}
+
+	if caps.FileWrite != nil {
+		L.SetGlobal("file_write", L.NewFunction(func(L *lua.LState) int {
+			if err := caps.FileWrite(L.CheckString(1), L.CheckString(2)); err != nil {
+				L.Push(lua.LString(err.Error()))
+				return 1
+			}
+			return 0
+		}))
+	}
+
+	if caps.FileList != nil {
+		L.SetGlobal("file_list", L.NewFunction(func(L *lua.LState) int {
+			entries, err := caps.FileList(L.CheckString(1))
+			if err != nil {
+				L.Push(lua.LNil)
+				L.Push(lua.LString(err.Error()))
+				return 2
+			}
+			t := L.NewTable()
+			for _, name := range entries {
+				t.Append(lua.LString(name))
+			}
+			L.Push(t)
+			return 1
+		}))
+	}
+
+	// --- Timers ---
+
+	if caps.SetTimeout != nil {
+		L.SetGlobal("set_timeout", L.NewFunction(func(L *lua.LState) int {
+			caps.SetTimeout(L.CheckString(1), L.CheckInt(2), L.CheckString(3))
+			return 0
+		}))
+	}
+
+	if caps.SetInterval != nil {
+		L.SetGlobal("set_interval", L.NewFunction(func(L *lua.LState) int {
+			caps.SetInterval(L.CheckString(1), L.CheckInt(2), L.CheckString(3))
+			return 0
+		}))
+	}
+
+	if caps.CancelTimer != nil {
+		L.SetGlobal("cancel_timer", L.NewFunction(func(L *lua.LState) int {
+			caps.CancelTimer(L.CheckString(1))
+			return 0
+		}))
+	}
+
+	// --- Notifications ---
+
+	if caps.Notify != nil {
+		L.SetGlobal("notify", L.NewFunction(func(L *lua.LState) int {
+			caps.Notify(L.CheckString(1), L.CheckString(2))
+			return 0
+		}))
+	}
 }
 
 // CallAction calls the Lua handle_action function. Returns an error if the

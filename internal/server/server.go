@@ -252,7 +252,7 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 			s.HandleUserMessage(msg.Text)
 
 		case "action":
-			s.handleAction(msg.Action, msg.Value)
+			s.HandleAction(msg.Action, msg.Value)
 		}
 	}
 }
@@ -355,8 +355,8 @@ func (s *Server) HandleUserMessage(text string) {
 	})
 }
 
-// handleAction processes a UI action from a remote client.
-func (s *Server) handleAction(action, value string) {
+// HandleAction processes a UI action from a remote client or a timer callback.
+func (s *Server) HandleAction(action, value string) {
 	if action == "" {
 		return
 	}
