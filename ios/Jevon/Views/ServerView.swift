@@ -104,7 +104,10 @@ struct ServerView: View {
 
     @ViewBuilder
     private func renderScroll() -> some View {
-        ScrollViewReader { proxy in
+        let allLeafIDs = collectLeafIDs(node)
+        let bottomID = allLeafIDs.last
+
+        return ScrollViewReader { proxy in
             ScrollView {
                 LazyVStack(spacing: 0) {
                     ForEach(indexedChildren()) { child in
@@ -113,14 +116,28 @@ struct ServerView: View {
                     }
                 }
             }
-            .onChange(of: node.childNodes.count) {
-                if let last = indexedChildren().last {
+            .onChange(of: allLeafIDs.count) {
+                if let id = bottomID {
                     withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(last.id, anchor: .bottom)
+                        proxy.scrollTo(id, anchor: .bottom)
                     }
                 }
             }
+            .onAppear {
+                if let id = bottomID {
+                    proxy.scrollTo(id, anchor: .bottom)
+                }
+            }
         }
+    }
+
+    /// Recursively collect all leaf node IDs for scroll tracking.
+    private func collectLeafIDs(_ n: ViewNode) -> [String] {
+        let children = n.children ?? []
+        if children.isEmpty {
+            return [n.stableId]
+        }
+        return children.flatMap { collectLeafIDs($0) }
     }
 
     // MARK: - List
