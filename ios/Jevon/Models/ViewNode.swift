@@ -10,11 +10,22 @@ struct ViewNode: Codable, Sendable {
     let props: ViewProps?
     let children: [ViewNode]?
 
-    /// Stable identity for SwiftUI. Uses server-provided ID if present.
+    /// Stable identity for SwiftUI.
     var stableId: String { id ?? type }
 
     /// Convenience accessor for children, never nil.
     var childNodes: [ViewNode] { children ?? [] }
+
+    /// Assign deterministic path-based IDs to all nodes that don't have
+    /// explicit IDs. This gives SwiftUI stable identity across re-renders
+    /// so it can preserve text field focus, scroll position, etc.
+    func withPathIDs(prefix: String = "") -> ViewNode {
+        let myID = id ?? "\(prefix)\(type)"
+        let newChildren = children?.enumerated().map { index, child in
+            child.withPathIDs(prefix: "\(myID)/\(index)-")
+        }
+        return ViewNode(type: type, id: myID, props: props, children: newChildren)
+    }
 }
 
 /// Display and interaction properties for a view node.

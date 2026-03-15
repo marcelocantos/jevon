@@ -349,12 +349,12 @@ final class Connection {
         }
         let screenName = isConnected ? "chat_screen" : "connect_screen"
 
-        mainView = luaRuntime.callScreen(screenName, state: state)
+        mainView = luaRuntime.callScreen(screenName, state: state)?.withPathIDs()
 
         // Render sheet if active.
         if !activeSheet.isEmpty {
             let sheetScreen = activeSheet + "_screen"
-            sheetView = luaRuntime.callScreen(sheetScreen, state: state)
+            sheetView = luaRuntime.callScreen(sheetScreen, state: state)?.withPathIDs(prefix: "sheet/")
         } else {
             sheetView = nil
         }
