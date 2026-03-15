@@ -318,7 +318,7 @@ Swift code changes.
 - **Cost**: 3
 - **Weight**: 1.7 (value 5 / cost 3)
 - **Parent**: 🎯T11
-- **Status**: identified
+- **Status**: achieved
 - **Discovered**: 2026-03-15
 
 16 props that un-hardcode current behavior:

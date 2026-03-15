@@ -75,7 +75,16 @@ final class LuaRuntime {
                     bgColor: nil, cornerRadius: nil, opacity: nil,
                     spacing: nil, padding: nil, minLength: nil,
                     alignment: nil, maxLines: nil, truncate: nil,
-                    title: nil, disabled: nil, action: nil, style: nil
+                    title: nil, titleDisplayMode: nil,
+                    disabled: nil, action: nil, style: nil,
+                    keyboard: nil, autocorrect: nil,
+                    autocapitalize: nil, submitLabel: nil,
+                    scrollAnchor: nil, scrollDismissKeyboard: nil,
+                    keyboardAvoidance: nil,
+                    frameWidth: nil, frameHeight: nil,
+                    frameMaxWidth: nil, frameMaxHeight: nil,
+                    foregroundStyle: nil, contentMode: nil,
+                    a11yLabel: nil
                 ),
                 children: nil
             )
@@ -690,9 +699,24 @@ private func luaTableToViewNode(_ L: OpaquePointer, at idx: Int32) -> ViewNode? 
         maxLines: getIntField(L, absIdx, "max_lines"),
         truncate: getStringField(L, absIdx, "truncate"),
         title: getStringField(L, absIdx, "title"),
+        titleDisplayMode: getStringField(L, absIdx, "title_display_mode"),
         disabled: getBoolField(L, absIdx, "disabled"),
         action: getStringField(L, absIdx, "action"),
-        style: getStringField(L, absIdx, "style")
+        style: getStringField(L, absIdx, "style"),
+        keyboard: getStringField(L, absIdx, "keyboard"),
+        autocorrect: getBoolField(L, absIdx, "autocorrect"),
+        autocapitalize: getStringField(L, absIdx, "autocapitalize"),
+        submitLabel: getStringField(L, absIdx, "submit_label"),
+        scrollAnchor: getStringField(L, absIdx, "scroll_anchor"),
+        scrollDismissKeyboard: getStringField(L, absIdx, "scroll_dismiss_keyboard"),
+        keyboardAvoidance: getStringField(L, absIdx, "keyboard_avoidance"),
+        frameWidth: getDoubleField(L, absIdx, "frame_width"),
+        frameHeight: getDoubleField(L, absIdx, "frame_height"),
+        frameMaxWidth: getFrameDimField(L, absIdx, "frame_max_width"),
+        frameMaxHeight: getFrameDimField(L, absIdx, "frame_max_height"),
+        foregroundStyle: getStringField(L, absIdx, "foreground_style"),
+        contentMode: getStringField(L, absIdx, "content_mode"),
+        a11yLabel: getStringField(L, absIdx, "a11y_label")
     )
 
     // Children
@@ -722,8 +746,16 @@ private func luaTableToViewNode(_ L: OpaquePointer, at idx: Int32) -> ViewNode? 
         || props.cornerRadius != nil || props.opacity != nil
         || props.spacing != nil || props.padding != nil || props.minLength != nil
         || props.alignment != nil || props.maxLines != nil || props.truncate != nil
-        || props.title != nil || props.disabled != nil
+        || props.title != nil || props.titleDisplayMode != nil || props.disabled != nil
         || props.action != nil || props.style != nil
+        || props.keyboard != nil || props.autocorrect != nil
+        || props.autocapitalize != nil || props.submitLabel != nil
+        || props.scrollAnchor != nil || props.scrollDismissKeyboard != nil
+        || props.keyboardAvoidance != nil
+        || props.frameWidth != nil || props.frameHeight != nil
+        || props.frameMaxWidth != nil || props.frameMaxHeight != nil
+        || props.foregroundStyle != nil || props.contentMode != nil
+        || props.a11yLabel != nil
 
     return ViewNode(
         type: type,
@@ -763,6 +795,18 @@ private func getBoolField(_ L: OpaquePointer, _ tableIdx: Int32, _ key: String) 
     defer { luaPop(L, 1) }
     guard lua_type(L, -1) == LUA_TBOOLEAN else { return nil }
     return lua_toboolean(L, -1) != 0
+}
+
+private func getFrameDimField(_ L: OpaquePointer, _ tableIdx: Int32, _ key: String) -> FrameDimension? {
+    lua_getfield(L, tableIdx, key)
+    defer { luaPop(L, 1) }
+    let t = lua_type(L, -1)
+    if t == LUA_TNUMBER {
+        return .value(lua_tonumber(L, -1))
+    } else if t == LUA_TSTRING, let cstr = lua_tolstring(L, -1, nil), String(cString: cstr) == "infinity" {
+        return .infinity
+    }
+    return nil
 }
 
 private func getPaddingField(_ L: OpaquePointer, _ tableIdx: Int32) -> [Int]? {

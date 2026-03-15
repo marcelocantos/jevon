@@ -44,7 +44,8 @@ type Props struct {
 	Truncate  string `json:"truncate,omitempty"`   // head, middle, tail
 
 	// Navigation
-	Title string `json:"title,omitempty"`
+	Title            string `json:"title,omitempty"`
+	TitleDisplayMode string `json:"title_display_mode,omitempty"` // inline, large, automatic
 
 	// State
 	Disabled bool `json:"disabled,omitempty"`
@@ -52,6 +53,30 @@ type Props struct {
 	// Interaction — action ID sent back to server on user interaction
 	Action string `json:"action,omitempty"`
 	Style  string `json:"style,omitempty"` // destructive, cancel, default
+
+	// Input
+	Keyboard       string `json:"keyboard,omitempty"`        // default, email, url, number, phone, ascii, decimal
+	Autocorrect    *bool  `json:"autocorrect,omitempty"`     // nil = system default
+	Autocapitalize string `json:"autocapitalize,omitempty"`  // none, words, sentences, all
+	SubmitLabel    string `json:"submit_label,omitempty"`    // return, done, send, search, go, next
+
+	// Scroll
+	ScrollAnchor         string `json:"scroll_anchor,omitempty"`          // top, bottom
+	ScrollDismissKeyboard string `json:"scroll_dismiss_keyboard,omitempty"` // interactive, immediately, never
+	KeyboardAvoidance    string `json:"keyboard_avoidance,omitempty"`     // avoid, ignore
+
+	// Frame
+	FrameWidth    float64 `json:"frame_width,omitempty"`
+	FrameHeight   float64 `json:"frame_height,omitempty"`
+	FrameMaxWidth  any    `json:"frame_max_width,omitempty"`  // number or "infinity"
+	FrameMaxHeight any    `json:"frame_max_height,omitempty"` // number or "infinity"
+
+	// Visual
+	ForegroundStyle string `json:"foreground_style,omitempty"` // primary, secondary, tertiary, quaternary
+	ContentMode     string `json:"content_mode,omitempty"`     // fit, fill
+
+	// Accessibility
+	A11yLabel string `json:"a11y_label,omitempty"`
 }
 
 // --- Wire messages ---

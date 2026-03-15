@@ -833,9 +833,34 @@ func luaToNode(v lua.LValue) (*Node, error) {
 	node.Props.MaxLines = luaInt(t, "max_lines")
 	node.Props.Truncate = luaString(t, "truncate")
 	node.Props.Title = luaString(t, "title")
+	node.Props.TitleDisplayMode = luaString(t, "title_display_mode")
 	node.Props.Disabled = luaBool(t, "disabled")
 	node.Props.Action = luaString(t, "action")
 	node.Props.Style = luaString(t, "style")
+
+	// Input
+	node.Props.Keyboard = luaString(t, "keyboard")
+	node.Props.Autocorrect = luaOptBool(t, "autocorrect")
+	node.Props.Autocapitalize = luaString(t, "autocapitalize")
+	node.Props.SubmitLabel = luaString(t, "submit_label")
+
+	// Scroll
+	node.Props.ScrollAnchor = luaString(t, "scroll_anchor")
+	node.Props.ScrollDismissKeyboard = luaString(t, "scroll_dismiss_keyboard")
+	node.Props.KeyboardAvoidance = luaString(t, "keyboard_avoidance")
+
+	// Frame
+	node.Props.FrameWidth = luaFloat(t, "frame_width")
+	node.Props.FrameHeight = luaFloat(t, "frame_height")
+	node.Props.FrameMaxWidth = luaFrameDim(t, "frame_max_width")
+	node.Props.FrameMaxHeight = luaFrameDim(t, "frame_max_height")
+
+	// Visual
+	node.Props.ForegroundStyle = luaString(t, "foreground_style")
+	node.Props.ContentMode = luaString(t, "content_mode")
+
+	// Accessibility
+	node.Props.A11yLabel = luaString(t, "a11y_label")
 
 	// Padding
 	if pt, ok := t.RawGetString("padding").(*lua.LTable); ok {
@@ -891,6 +916,31 @@ func luaBool(t *lua.LTable, key string) bool {
 		return bool(b)
 	}
 	return false
+}
+
+func luaOptBool(t *lua.LTable, key string) *bool {
+	v := t.RawGetString(key)
+	if b, ok := v.(lua.LBool); ok {
+		val := bool(b)
+		return &val
+	}
+	return nil
+}
+
+// luaFrameDim reads a field that can be a number or the string "infinity".
+func luaFrameDim(t *lua.LTable, key string) any {
+	v := t.RawGetString(key)
+	switch val := v.(type) {
+	case lua.LNumber:
+		if float64(val) != 0 {
+			return float64(val)
+		}
+	case lua.LString:
+		if string(val) == "infinity" {
+			return "infinity"
+		}
+	}
+	return nil
 }
 
 // luaTableToGoMap converts a Lua table to a Go map[string]any.

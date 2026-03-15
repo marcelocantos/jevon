@@ -112,7 +112,10 @@ function chat_screen(state)
         table.insert(msg_nodes, chat_bubble({role = "jevon", text = state.streaming_text}))
     end
 
-    local messages_scroll = scroll("messages", vstack(8, unpack(msg_nodes)))
+    local messages_scroll = with_props(
+        scroll("messages", vstack(8, unpack(msg_nodes))),
+        {scroll_anchor = "bottom", scroll_dismiss_keyboard = "interactive", keyboard_avoidance = "ignore"}
+    )
 
     -- Thinking status bar
     local thinking_bar = nil
@@ -125,7 +128,10 @@ function chat_screen(state)
 
     -- Input bar
     local input_bar = padding(
-        text_field("message-input", "Message", "send_message"),
+        with_props(
+            text_field("message-input", "Message", "send_message"),
+            {submit_label = "send", autocapitalize = "sentences"}
+        ),
         8, 16, 8, 16
     )
 

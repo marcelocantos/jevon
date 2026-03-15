@@ -105,6 +105,7 @@ struct ServerView: View {
     @ViewBuilder
     private func renderScroll() -> some View {
         let childCount = countDescendants(node)
+        let props = node.props
 
         return ScrollViewReader { proxy in
             ScrollView {
@@ -117,9 +118,9 @@ struct ServerView: View {
                     Color.clear.frame(height: 1).id("__scroll_bottom__")
                 }
             }
-            .scrollDismissesKeyboard(.interactively)
-            .defaultScrollAnchor(.bottom)
-            .ignoresSafeArea(.keyboard)
+            .applyScrollDismissKeyboard(props?.scrollDismissKeyboard)
+            .applyScrollAnchor(props?.scrollAnchor)
+            .applyKeyboardAvoidance(props?.keyboardAvoidance)
             .onChange(of: childCount) {
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("__scroll_bottom__", anchor: .bottom)
@@ -221,6 +222,7 @@ struct ServerView: View {
 
     @ViewBuilder
     private func renderImage() -> some View {
+        let mode: ContentMode = node.props?.contentMode == "fill" ? .fill : .fit
         if let symbol = node.props?.sfSymbol {
             Image(systemName: symbol)
         } else if let asset = node.props?.imageAsset {
@@ -232,13 +234,13 @@ struct ServerView: View {
                    let uiImage = UIImage(data: data) {
                     Image(uiImage: uiImage)
                         .resizable()
-                        .aspectRatio(contentMode: .fit)
+                        .aspectRatio(contentMode: mode)
                 } else {
                     Image(systemName: "photo")
                 }
             } else if let url = URL(string: urlString) {
                 AsyncImage(url: url) { image in
-                    image.resizable().aspectRatio(contentMode: .fit)
+                    image.resizable().aspectRatio(contentMode: mode)
                 } placeholder: {
                     ProgressView()
                 }
@@ -270,7 +272,7 @@ struct ServerView: View {
                 }
             }
             .navigationTitle(title)
-            .navigationBarTitleDisplayMode(.inline)
+            .applyTitleDisplayMode(node.props?.titleDisplayMode)
             .toolbar {
                 ToolbarItem(placement: .topBarLeading) {
                     HStack(spacing: 8) {
@@ -369,6 +371,14 @@ struct ServerView: View {
             .applyLineLimit(node.props?.maxLines)
             .applyOpacity(node.props?.opacity)
             .applyDisabled(node.props?.disabled)
+            .applyFrame(
+                width: node.props?.frameWidth,
+                height: node.props?.frameHeight,
+                maxWidth: node.props?.frameMaxWidth,
+                maxHeight: node.props?.frameMaxHeight
+            )
+            .applyForegroundStyle(node.props?.foregroundStyle)
+            .applyA11yLabel(node.props?.a11yLabel)
     }
 
     // MARK: - Helpers
@@ -394,17 +404,20 @@ private struct ServerTextField: View {
 
     var body: some View {
         let action = node.props?.action ?? ""
+        let props = node.props
 
         HStack(spacing: 8) {
             TextField(
-                node.props?.placeholder ?? "",
+                props?.placeholder ?? "",
                 text: $text,
                 axis: .vertical
             )
             .textFieldStyle(.roundedBorder)
             .lineLimit(1...5)
-            .autocorrectionDisabled()
-            .textInputAutocapitalization(.sentences)
+            .applyKeyboardType(props?.keyboard)
+            .applyAutocorrect(props?.autocorrect)
+            .applyAutocapitalize(props?.autocapitalize)
+            .applySubmitLabel(props?.submitLabel)
             .onSubmit { submit(action: action) }
 
             Button {
@@ -548,6 +561,165 @@ private extension View {
         default: self
         }
     }
+
+    // MARK: - Input modifiers
+
+    @ViewBuilder
+    func applyKeyboardType(_ keyboard: String?) -> some View {
+        if let keyboard {
+            switch keyboard {
+            case "email": self.keyboardType(.emailAddress)
+            case "url": self.keyboardType(.URL)
+            case "number": self.keyboardType(.numberPad)
+            case "phone": self.keyboardType(.phonePad)
+            case "ascii": self.keyboardType(.asciiCapable)
+            case "decimal": self.keyboardType(.decimalPad)
+            default: self.keyboardType(.default)
+            }
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func applyAutocorrect(_ autocorrect: Bool?) -> some View {
+        if let autocorrect {
+            self.autocorrectionDisabled(!autocorrect)
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func applyAutocapitalize(_ autocapitalize: String?) -> some View {
+        if let autocapitalize {
+            switch autocapitalize {
+            case "none": self.textInputAutocapitalization(.never)
+            case "words": self.textInputAutocapitalization(.words)
+            case "sentences": self.textInputAutocapitalization(.sentences)
+            case "all": self.textInputAutocapitalization(.characters)
+            default: self
+            }
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func applySubmitLabel(_ submitLabel: String?) -> some View {
+        if let submitLabel {
+            switch submitLabel {
+            case "done": self.submitLabel(.done)
+            case "send": self.submitLabel(.send)
+            case "search": self.submitLabel(.search)
+            case "go": self.submitLabel(.go)
+            case "next": self.submitLabel(.next)
+            default: self.submitLabel(.return)
+            }
+        } else {
+            self
+        }
+    }
+
+    // MARK: - Scroll modifiers
+
+    @ViewBuilder
+    func applyScrollDismissKeyboard(_ mode: String?) -> some View {
+        if let mode {
+            switch mode {
+            case "interactive": self.scrollDismissesKeyboard(.interactively)
+            case "immediately": self.scrollDismissesKeyboard(.immediately)
+            case "never": self.scrollDismissesKeyboard(.never)
+            default: self
+            }
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func applyScrollAnchor(_ anchor: String?) -> some View {
+        if let anchor {
+            switch anchor {
+            case "bottom": self.defaultScrollAnchor(.bottom)
+            case "top": self.defaultScrollAnchor(.top)
+            default: self
+            }
+        } else {
+            self
+        }
+    }
+
+    @ViewBuilder
+    func applyKeyboardAvoidance(_ avoidance: String?) -> some View {
+        if avoidance == "ignore" {
+            self.ignoresSafeArea(.keyboard)
+        } else {
+            self
+        }
+    }
+
+    // MARK: - Frame modifiers
+
+    @ViewBuilder
+    func applyFrame(width: Double?, height: Double?,
+                    maxWidth: FrameDimension?, maxHeight: FrameDimension?) -> some View {
+        if width != nil || height != nil || maxWidth != nil || maxHeight != nil {
+            self.frame(
+                minWidth: nil, idealWidth: nil,
+                maxWidth: maxWidth?.cgFloat,
+                minHeight: nil, idealHeight: nil,
+                maxHeight: maxHeight?.cgFloat
+            )
+            .frame(
+                width: width.map { CGFloat($0) },
+                height: height.map { CGFloat($0) }
+            )
+        } else {
+            self
+        }
+    }
+
+    // MARK: - Visual modifiers
+
+    @ViewBuilder
+    func applyForegroundStyle(_ style: String?) -> some View {
+        if let style {
+            switch style {
+            case "primary": self.foregroundStyle(.primary)
+            case "secondary": self.foregroundStyle(.secondary)
+            case "tertiary": self.foregroundStyle(.tertiary)
+            case "quaternary": self.foregroundStyle(.quaternary)
+            default: self
+            }
+        } else {
+            self
+        }
+    }
+
+    // MARK: - Navigation modifiers
+
+    @ViewBuilder
+    func applyTitleDisplayMode(_ mode: String?) -> some View {
+        switch mode {
+        case "large": self.navigationBarTitleDisplayMode(.large)
+        case "automatic": self.navigationBarTitleDisplayMode(.automatic)
+        default: self.navigationBarTitleDisplayMode(.inline)
+        }
+    }
+
+    // MARK: - Accessibility modifiers
+
+    @ViewBuilder
+    func applyA11yLabel(_ label: String?) -> some View {
+        if let label {
+            self.accessibilityLabel(label)
+        } else {
+            self
+        }
+    }
+
+    // MARK: - Padding
 
     @ViewBuilder
     func applyPaddingArray(_ padding: [Int]?) -> some View {
