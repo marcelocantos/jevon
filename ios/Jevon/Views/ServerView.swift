@@ -104,8 +104,7 @@ struct ServerView: View {
 
     @ViewBuilder
     private func renderScroll() -> some View {
-        let allLeafIDs = collectLeafIDs(node)
-        let bottomID = allLeafIDs.last
+        let childCount = countDescendants(node)
 
         return ScrollViewReader { proxy in
             ScrollView {
@@ -114,30 +113,25 @@ struct ServerView: View {
                         ServerView(node: child.node, onAction: onAction)
                             .id(child.id)
                     }
+                    // Invisible anchor at the bottom for scrollTo.
+                    Color.clear.frame(height: 1).id("__scroll_bottom__")
                 }
             }
-            .onChange(of: allLeafIDs.count) {
-                if let id = bottomID {
-                    withAnimation(.easeOut(duration: 0.2)) {
-                        proxy.scrollTo(id, anchor: .bottom)
-                    }
+            .onChange(of: childCount) {
+                withAnimation(.easeOut(duration: 0.2)) {
+                    proxy.scrollTo("__scroll_bottom__", anchor: .bottom)
                 }
             }
             .onAppear {
-                if let id = bottomID {
-                    proxy.scrollTo(id, anchor: .bottom)
-                }
+                proxy.scrollTo("__scroll_bottom__", anchor: .bottom)
             }
         }
     }
 
-    /// Recursively collect all leaf node IDs for scroll tracking.
-    private func collectLeafIDs(_ n: ViewNode) -> [String] {
+    /// Count total descendants for change detection.
+    private func countDescendants(_ n: ViewNode) -> Int {
         let children = n.children ?? []
-        if children.isEmpty {
-            return [n.stableId]
-        }
-        return children.flatMap { collectLeafIDs($0) }
+        return children.count + children.reduce(0) { $0 + countDescendants($1) }
     }
 
     // MARK: - List
@@ -406,6 +400,8 @@ private struct ServerTextField: View {
             )
             .textFieldStyle(.roundedBorder)
             .lineLimit(1...5)
+            .autocorrectionDisabled()
+            .textInputAutocapitalization(.sentences)
             .onSubmit { submit(action: action) }
 
             Button {
