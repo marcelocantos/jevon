@@ -25,23 +25,34 @@ type EventCallback func(workerID, workerName, result string, failed bool)
 // ReloadViewsFunc reloads Lua view scripts and pushes updated views.
 type ReloadViewsFunc func() error
 
+// TranscriptOps provides transcript manipulation functions.
+type TranscriptOps struct {
+	Read     func(sessionID string) ([]map[string]any, error)
+	Truncate func(sessionID string, keepTurns int) error
+	ResetID  func()                    // clear the jevon claude session ID
+	GetID    func() string             // get the current jevon claude session ID
+}
+
 // Server wraps an MCP server that provides worker management tools.
 type Server struct {
 	mgr          *manager.Manager
 	workerWD     string
 	onDone       EventCallback
 	reloadViews  ReloadViewsFunc
+	transcript   *TranscriptOps
 	transport    *server.StreamableHTTPServer
 }
 
 // New creates an MCP server with jevon tools wired to the given manager.
 // reloadViews may be nil if server-driven UI is not active.
-func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadViews ReloadViewsFunc) *Server {
+// transcript may be nil if transcript ops are not available.
+func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadViews ReloadViewsFunc, transcript *TranscriptOps) *Server {
 	s := &Server{
 		mgr:         mgr,
 		workerWD:    workerWD,
 		onDone:      onDone,
 		reloadViews: reloadViews,
+		transcript:  transcript,
 	}
 
 	mcpSrv := server.NewMCPServer("jevon", "1.0.0")
@@ -96,6 +107,22 @@ func New(mgr *manager.Manager, workerWD string, onDone EventCallback, reloadView
 				mcp.WithDescription("Reload Lua view scripts and push updated UI to connected clients. Call this after editing files in ~/.jevon/lua/views/."),
 			),
 			s.handleReloadViews,
+		)
+	}
+
+	if s.transcript != nil {
+		mcpSrv.AddTool(
+			mcp.NewTool("jevon_transcript_read",
+				mcp.WithDescription("Read the Jevon conversation transcript. Returns an array of turns with role and text."),
+			),
+			s.handleTranscriptRead,
+		)
+		mcpSrv.AddTool(
+			mcp.NewTool("jevon_transcript_rewind",
+				mcp.WithDescription("Rewind the Jevon conversation to keep only the first N turns. A turn is a user message + assistant response. Set turns to 0 for a complete reset. The next message will start a fresh conversation."),
+				mcp.WithNumber("turns", mcp.Required(), mcp.Description("Number of turns to keep (0 = reset)")),
+			),
+			s.handleTranscriptRewind,
 		)
 	}
 
@@ -284,6 +311,50 @@ func (s *Server) handleReloadViews(_ context.Context, _ mcp.CallToolRequest) (*m
 		return mcp.NewToolResultError(fmt.Sprintf("reload failed: %v", err)), nil
 	}
 	return mcp.NewToolResultText("Views reloaded and pushed to connected clients."), nil
+}
+
+func (s *Server) handleTranscriptRead(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	sessionID := s.transcript.GetID()
+	if sessionID == "" {
+		return mcp.NewToolResultText("No active Jevon session."), nil
+	}
+	turns, err := s.transcript.Read(sessionID)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("read failed: %v", err)), nil
+	}
+	if len(turns) == 0 {
+		return mcp.NewToolResultText("Transcript is empty."), nil
+	}
+
+	var b strings.Builder
+	for i, turn := range turns {
+		role, _ := turn["role"].(string)
+		text, _ := turn["text"].(string)
+		fmt.Fprintf(&b, "Turn %d [%s]: %s\n", i+1, role, truncate(text, 200))
+	}
+	return mcp.NewToolResultText(b.String()), nil
+}
+
+func (s *Server) handleTranscriptRewind(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	turnsF, _ := args["turns"].(float64)
+	keepTurns := int(turnsF)
+
+	sessionID := s.transcript.GetID()
+	if sessionID == "" {
+		return mcp.NewToolResultText("No active session to rewind."), nil
+	}
+
+	if err := s.transcript.Truncate(sessionID, keepTurns); err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("rewind failed: %v", err)), nil
+	}
+
+	if keepTurns == 0 {
+		s.transcript.ResetID()
+		return mcp.NewToolResultText("Session reset. Next message will start a fresh conversation."), nil
+	}
+
+	return mcp.NewToolResultText(fmt.Sprintf("Rewound to %d turns. The truncated context will be used on the next message.", keepTurns)), nil
 }
 
 func truncate(s string, max int) string {

@@ -507,6 +507,21 @@ func main() {
 		}
 		srv.PushScripts()
 		return nil
+	}, &mcpserver.TranscriptOps{
+		Read: func(sessionID string) ([]map[string]any, error) {
+			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+			return tr.Read(sessionID)
+		},
+		Truncate: func(sessionID string, keepTurns int) error {
+			tr := transcript.NewReader(filepath.Join(homeDir, ".claude", "projects"))
+			return tr.Truncate(sessionID, keepTurns)
+		},
+		ResetID: func() {
+			database.Set("jevon_claude_id", "")
+		},
+		GetID: func() string {
+			return database.Get("jevon_claude_id")
+		},
 	})
 
 	mux := http.NewServeMux()
