@@ -117,6 +117,9 @@ struct ServerView: View {
                     Color.clear.frame(height: 1).id("__scroll_bottom__")
                 }
             }
+            .scrollDismissesKeyboard(.interactively)
+            .defaultScrollAnchor(.bottom)
+            .ignoresSafeArea(.keyboard)
             .onChange(of: childCount) {
                 withAnimation(.easeOut(duration: 0.2)) {
                     proxy.scrollTo("__scroll_bottom__", anchor: .bottom)
