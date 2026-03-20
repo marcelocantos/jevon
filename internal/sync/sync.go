@@ -7,8 +7,6 @@
 package sync
 
 import (
-	"context"
-	"database/sql"
 	"encoding/binary"
 	"fmt"
 	"log/slog"
@@ -16,8 +14,6 @@ import (
 	"time"
 
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
-
-	_ "github.com/mattn/go-sqlite3"
 )
 
 // Request is a decoded row from the client-owned requests table.
@@ -43,9 +39,8 @@ type SessionData struct {
 // database. The server Peer approves client ownership requests and owns
 // all tables not claimed by the client.
 type SyncManager struct {
-	db       *sql.DB
-	peer     *sqlpipe.Peer
-	peerConn *sql.Conn
+	sdb  *sqlpipe.Database
+	peer *sqlpipe.Peer
 
 	mu        gosync.Mutex
 	onRequest func(Request)
@@ -57,29 +52,28 @@ type SyncManager struct {
 // NewSyncManager opens (or reuses) the database, creates the sync schema,
 // and initialises a Peer for bidirectional replication.
 func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error) {
-	db, err := sql.Open("sqlite3", dbPath+"?_journal_mode=WAL")
+	sdb, err := sqlpipe.OpenDatabase(dbPath)
 	if err != nil {
 		return nil, fmt.Errorf("open db: %w", err)
 	}
 
-	ctx := context.Background()
-
-	peerConn, err := db.Conn(ctx)
-	if err != nil {
-		db.Close()
-		return nil, fmt.Errorf("peer conn: %w", err)
+	// Enable WAL mode.
+	if err := sdb.Exec("PRAGMA journal_mode=WAL"); err != nil {
+		sdb.Close()
+		return nil, fmt.Errorf("set WAL: %w", err)
 	}
 
 	sm := &SyncManager{
-		db:        db,
-		peerConn:  peerConn,
+		sdb:       sdb,
 		onRequest: onRequest,
 	}
 
 	// Seed the last-seen request ID so we don't replay old rows on startup.
-	var maxID sql.NullInt64
-	if err := db.QueryRow(`SELECT MAX(id) FROM requests`).Scan(&maxID); err == nil && maxID.Valid {
-		sm.lastRequestID = maxID.Int64
+	qr, err := sdb.Query(`SELECT MAX(id) FROM requests`)
+	if err == nil && len(qr.Rows) > 0 && qr.Rows[0][0] != nil {
+		if v, ok := qr.Rows[0][0].(int64); ok {
+			sm.lastRequestID = v
+		}
 	}
 
 	logCb := func(level sqlpipe.LogLevel, msg string) {
@@ -95,7 +89,7 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 		}
 	}
 
-	peer, err := sqlpipe.NewPeer(peerConn, sqlpipe.PeerConfig{
+	peer, err := sqlpipe.NewPeer(sdb, sqlpipe.PeerConfig{
 		ApproveOwnership: func(requested map[string]bool) bool {
 			return true // server approves all client ownership requests
 		},
@@ -106,8 +100,7 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 		OnLog: logCb,
 	})
 	if err != nil {
-		peerConn.Close()
-		db.Close()
+		sdb.Close()
 		return nil, fmt.Errorf("new peer: %w", err)
 	}
 	sm.peer = peer
@@ -115,43 +108,38 @@ func NewSyncManager(dbPath string, onRequest func(Request)) (*SyncManager, error
 	return sm, nil
 }
 
-// DB returns the underlying *sql.DB for use by other packages that
-// need direct database access (e.g., the existing db.DB wrapper).
-func (sm *SyncManager) DB() *sql.DB { return sm.db }
+// DB returns the underlying sqlpipe Database for use by other packages
+// that need direct database access.
+func (sm *SyncManager) DB() *sqlpipe.Database { return sm.sdb }
 
 // SeedTranscript copies messages from the legacy transcript table into
 // sync_transcript if sync_transcript is empty. Called once at startup.
-func (sm *SyncManager) SeedTranscript(legacyDB *sql.DB) error {
+func (sm *SyncManager) SeedTranscript(legacyDB *sqlpipe.Database) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	var count int
-	if err := sm.db.QueryRow("SELECT COUNT(*) FROM sync_transcript").Scan(&count); err != nil {
-		return err
-	}
-	if count > 0 {
-		return nil // already seeded
-	}
-
-	rows, err := legacyDB.Query("SELECT role, text, created_at FROM transcript ORDER BY rowid")
+	qr, err := sm.sdb.Query("SELECT COUNT(*) FROM sync_transcript")
 	if err != nil {
 		return err
 	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var role, text, ts string
-		if err := rows.Scan(&role, &text, &ts); err != nil {
-			return err
+	if len(qr.Rows) > 0 {
+		if v, ok := qr.Rows[0][0].(int64); ok && v > 0 {
+			return nil // already seeded
 		}
-		if _, err := sm.peerConn.ExecContext(context.Background(),
+	}
+
+	for row := range legacyDB.Rows("SELECT role, text, created_at FROM transcript ORDER BY rowid") {
+		if row.Err() != nil {
+			return row.Err()
+		}
+		if err := sm.sdb.Exec(
 			"INSERT INTO sync_transcript (role, content, timestamp) VALUES (?, ?, ?)",
-			role, text, ts,
+			row.Text(0), row.Text(1), row.Text(2),
 		); err != nil {
 			return err
 		}
 	}
-	return rows.Err()
+	return nil
 }
 
 // ── Wire framing ────────────────────────────────────────────────
@@ -250,21 +238,19 @@ func (sm *SyncManager) processNewRequests() {
 	if sm.onRequest == nil {
 		return
 	}
-	rows, err := sm.db.Query(
+	for row := range sm.sdb.Rows(
 		`SELECT id, type, payload, created_at FROM requests WHERE id > ? ORDER BY id`,
 		sm.lastRequestID,
-	)
-	if err != nil {
-		slog.Error("query new requests", "err", err)
-		return
-	}
-	defer rows.Close()
-
-	for rows.Next() {
-		var r Request
-		if err := rows.Scan(&r.ID, &r.Type, &r.Payload, &r.CreatedAt); err != nil {
-			slog.Error("scan request", "err", err)
-			continue
+	) {
+		if row.Err() != nil {
+			slog.Error("query new requests", "err", row.Err())
+			return
+		}
+		r := Request{
+			ID:        row.Int64(0),
+			Type:      row.Text(1),
+			Payload:   row.Text(2),
+			CreatedAt: row.Text(3),
 		}
 		sm.lastRequestID = r.ID
 		sm.onRequest(r)
@@ -287,11 +273,10 @@ func (sm *SyncManager) WriteTranscript(role, content string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.peerConn.ExecContext(context.Background(),
+	if err := sm.sdb.Exec(
 		`INSERT INTO sync_transcript (role, content) VALUES (?, ?)`,
 		role, content,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("insert transcript: %w", err)
 	}
 	return sm.flushLocked()
@@ -302,11 +287,10 @@ func (sm *SyncManager) WriteServerState(status, streamingText string) ([]byte, e
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.peerConn.ExecContext(context.Background(),
+	if err := sm.sdb.Exec(
 		`UPDATE server_state SET status = ?, streaming_text = ? WHERE id = 1`,
 		status, streamingText,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("update server_state: %w", err)
 	}
 	return sm.flushLocked()
@@ -317,11 +301,10 @@ func (sm *SyncManager) AppendStreamingText(text string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.peerConn.ExecContext(context.Background(),
+	if err := sm.sdb.Exec(
 		`UPDATE server_state SET streaming_text = streaming_text || ? WHERE id = 1`,
 		text,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("append streaming_text: %w", err)
 	}
 	return sm.flushLocked()
@@ -332,9 +315,9 @@ func (sm *SyncManager) ClearStreamingText() ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.peerConn.ExecContext(context.Background(),
-		`UPDATE server_state SET streaming_text = '' WHERE id = 1`)
-	if err != nil {
+	if err := sm.sdb.Exec(
+		`UPDATE server_state SET streaming_text = '' WHERE id = 1`,
+	); err != nil {
 		return nil, fmt.Errorf("clear streaming_text: %w", err)
 	}
 	return sm.flushLocked()
@@ -355,7 +338,7 @@ func (sm *SyncManager) WriteSessions(sessions []SessionData) ([]byte, error) {
 		if s.Active {
 			active = 1
 		}
-		_, err := sm.peerConn.ExecContext(context.Background(),
+		if err := sm.sdb.Exec(
 			`INSERT INTO sessions (id, name, status, workdir, active, score, mod_time)
 			 VALUES (?, ?, ?, ?, ?, ?, ?)
 			 ON CONFLICT(id) DO UPDATE SET
@@ -366,8 +349,7 @@ func (sm *SyncManager) WriteSessions(sessions []SessionData) ([]byte, error) {
 				score    = excluded.score,
 				mod_time = excluded.mod_time`,
 			s.ID, s.Name, s.Status, s.WorkDir, active, s.Score, modTime,
-		)
-		if err != nil {
+		); err != nil {
 			return nil, fmt.Errorf("upsert session %s: %w", s.ID, err)
 		}
 	}
@@ -379,15 +361,14 @@ func (sm *SyncManager) WriteScripts(name, source string) ([]byte, error) {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.peerConn.ExecContext(context.Background(),
+	if err := sm.sdb.Exec(
 		`INSERT INTO scripts (name, source, updated_at)
 		 VALUES (?, ?, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))
 		 ON CONFLICT(name) DO UPDATE SET
 			source     = excluded.source,
 			updated_at = excluded.updated_at`,
 		name, source,
-	)
-	if err != nil {
+	); err != nil {
 		return nil, fmt.Errorf("upsert script %s: %w", name, err)
 	}
 	return sm.flushLocked()
@@ -398,9 +379,8 @@ func (sm *SyncManager) SetVersion(version string) error {
 	sm.mu.Lock()
 	defer sm.mu.Unlock()
 
-	_, err := sm.peerConn.ExecContext(context.Background(),
+	return sm.sdb.Exec(
 		`UPDATE server_state SET version = ? WHERE id = 1`, version)
-	return err
 }
 
 // flushLocked flushes the peer and returns wire bytes. Caller must hold sm.mu.
@@ -417,11 +397,8 @@ func (sm *SyncManager) Close() error {
 	if sm.peer != nil {
 		sm.peer.Close()
 	}
-	if sm.peerConn != nil {
-		sm.peerConn.Close()
-	}
-	if sm.db != nil {
-		return sm.db.Close()
+	if sm.sdb != nil {
+		return sm.sdb.Close()
 	}
 	return nil
 }

@@ -14,6 +14,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
+
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
 	"github.com/marcelocantos/jevon/internal/discovery"
@@ -197,7 +199,7 @@ func main() {
 	var srvRef *server.Server
 	syncDBPath := filepath.Join(homeDir, ".jevon", "sync.db")
 	var syncMgr *jvsync.SyncManager
-	if syncDB, err := db.OpenRaw(syncDBPath); err != nil {
+	if syncDB, err := sqlpipe.OpenDatabase(syncDBPath); err != nil {
 		slog.Error("sqlpipe: cannot open sync db — running without sync", "err", err)
 	} else if err := db.CreateSyncSchema(syncDB); err != nil {
 		slog.Error("sqlpipe: schema creation failed — running without sync", "err", err)
@@ -225,7 +227,7 @@ func main() {
 				slog.Warn("sqlpipe: failed to set version", "err", err)
 			}
 			// Seed sync_transcript from legacy transcript table.
-			if err := syncMgr.SeedTranscript(database.SqlDB()); err != nil {
+			if err := syncMgr.SeedTranscript(database.SqlpipeDB()); err != nil {
 				slog.Warn("sqlpipe: transcript seeding failed", "err", err)
 			}
 			// Flush seed data so it's available for the first client handshake.

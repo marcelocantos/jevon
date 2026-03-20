@@ -3,12 +3,12 @@
 
 package db
 
-import "database/sql"
+import "github.com/marcelocantos/sqlpipe/go/sqlpipe"
 
 // CreateSyncSchema creates the tables used by sqlpipe-based state sync.
 // Server-owned tables are mastered by jevond; client-owned tables are
 // mastered by the iOS app and replicated back.
-func CreateSyncSchema(db *sql.DB) error {
+func CreateSyncSchema(sdb *sqlpipe.Database) error {
 	for _, ddl := range []string{
 		// Server-owned tables.
 		`CREATE TABLE IF NOT EXISTS sync_transcript (
@@ -50,7 +50,7 @@ func CreateSyncSchema(db *sql.DB) error {
 		// Seed server_state singleton.
 		`INSERT OR IGNORE INTO server_state (id) VALUES (1)`,
 	} {
-		if _, err := db.Exec(ddl); err != nil {
+		if err := sdb.Exec(ddl); err != nil {
 			return err
 		}
 	}

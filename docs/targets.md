@@ -1,6 +1,6 @@
 # Convergence Targets
 
-<!-- last-evaluated: 35cb8b6 -->
+<!-- last-evaluated: 073ff51a -->
 
 ## Active
 
@@ -42,70 +42,76 @@ bypass. Permission tiers from the trust model (🎯T4) are enforced.
   the WebSocket protocol.
 - Tests verify that permission-requiring actions trigger confirmation.
 
-### 🎯T8 Target-driven session infrastructure
+### 🎯T8 Stateless worker dispatch
 
-- **Value**: 47
-- **Cost**: 47
-- **Weight**: 1.0 (value 47 / cost 47)
-- **Status**: identified — vision doc written (`docs/vision-v2.md`), decomposed into sub-targets
+- **Value**: 21
+- **Cost**: 18
+- **Weight**: 1.2 (value 21 / cost 18)
+- **Status**: identified — revised after cworkers v0.14 overhaul (removed pool, shadow context, transcript discovery in favour of stateless on-demand spawning)
 - **Discovered**: 2026-03-14
 
-**Desired state:** Jevon is a session runtime where every agent is a
-session with targets, capabilities, and provenance. cworkers and doit are
-absorbed. Work is submitted via `jwork` and routed by the daemon to the
-best session (existing idle, active related, or new). No rigid hierarchy
-— structure emerges from the work.
+**Desired state:** jevond dispatches work to on-demand Claude Code
+workers via `jwork` MCP tool. Workers are disposable subprocesses —
+spawned per task, observed via stdin/stdout, no pooling or implicit
+context injection. Caller provides all context in the task description.
+SQLite tracks workers for observability. cworkers absorbed into jevond.
+
+**Key design principles (from cworkers v0.14 overhaul):**
+- Workers that just do a job don't need session tracking — spawn, run, done.
+- No shadow context injection — caller owns the task description.
+- No worker pool — on-demand spawning is simpler; latency cost is acceptable.
+- Progress via markdown heading extraction from worker output, not semantic understanding.
+- Observability via SQLite + SSE for dashboard, but that's telemetry, not control state.
 
 **Acceptance criteria:**
 - All sub-targets achieved.
-- cworkers and doit repos archived after absorption complete.
+- cworkers repo archived after absorption complete.
 
-**Design:** `docs/vision-v2.md`
+**Prior design:** `docs/vision-v2.md` (superseded by this simpler model)
 
-#### 🎯T8.1 Session model foundation
+#### 🎯T8.1 Worker dispatch foundation
 
-- **Value**: 13
-- **Cost**: 13
-- **Weight**: 1.0 (value 13 / cost 13)
+- **Value**: 8
+- **Cost**: 5
+- **Weight**: 1.6 (value 8 / cost 5)
 - **Parent**: 🎯T8
-- **Gates**: 🎯T8.2, 🎯T8.3, 🎯T8.4, 🎯T8.5
+- **Gates**: 🎯T8.2, 🎯T8.3
 - **Status**: identified
 - **Discovered**: 2026-03-14
 
-**Desired state:** Sessions are the universal primitive with targets,
-capabilities, provenance, and directory context. The session registry
-lives in SQLite. `jwork` MCP tool submits targets (initially routes to
-new sessions only).
+**Desired state:** `jwork` MCP tool dispatches tasks to on-demand
+Claude Code workers. Each worker is a fresh `claude -p` subprocess.
+Task description is self-contained — no implicit context injection.
 
 **Acceptance criteria:**
-- `internal/session/` and `internal/manager/` rewritten around
-  session-as-universal-primitive model.
-- Session struct has: target(s), transcript ref, directory context,
-  capabilities, provenance.
-- Session registry in SQLite (not just transcript/KV).
-- `jwork` MCP tool accepts a target and creates/routes to a session.
-- "Jevon is a special coordinator session" concept removed from
-  `internal/jevon/` — it becomes just another session.
+- `jwork` MCP tool accepts task text, optional cwd and model.
+- Spawns `claude -p` subprocess, writes task to stdin, reads NDJSON
+  from stdout.
+- Returns result text when worker completes.
+- Depth-controlled hierarchies: workers can call `jwork` up to
+  max depth (3), with delegation guidance injected at higher depths.
+- Progress heartbeats: extract markdown headings from worker output,
+  throttle by heading depth and time window.
 
-#### 🎯T8.2 cworkers primitives absorbed
+#### 🎯T8.2 Observability
 
-- **Value**: 13
-- **Cost**: 13
-- **Weight**: 1.0 (value 13 / cost 13)
+- **Value**: 5
+- **Cost**: 5
+- **Weight**: 1.0 (value 5 / cost 5)
 - **Parent**: 🎯T8
 - **Depends on**: 🎯T8.1
 - **Status**: identified
 - **Discovered**: 2026-03-14
 
-**Desired state:** Pool, shadow, and dispatch infrastructure from
-cworkers is integrated into jevond's session runtime.
+**Desired state:** Worker lifecycle and output tracked in SQLite for
+dashboard visibility and post-hoc analysis.
 
 **Acceptance criteria:**
-- Session pool: pre-warmed `claude -p` processes, self-replenishing.
-- Shadow registry: transcript tailing for context injection.
-- Progress throttle: MCP heartbeats from worker output.
-- SSE event hub: session lifecycle events broadcast to dashboard.
-- Svelte dashboard adapted for session model (sessions, not workers).
+- SQLite tables: workers (id, task, status, model, cwd, started_at,
+  ended_at), events (worker output lines).
+- SSE event hub: worker lifecycle events broadcast to dashboard.
+- Dashboard shows active/completed workers with status and output.
+- Per-worker token counts and outcomes recorded.
 
 #### 🎯T8.3 Execution safety absorbed (doit)
 
@@ -118,55 +124,14 @@ cworkers is integrated into jevond's session runtime.
 - **Discovered**: 2026-03-14
 
 **Desired state:** doit's policy engine operates as an execution safety
-layer between sessions and the OS.
+layer between workers and the OS.
 
 **Acceptance criteria:**
-- Engine API (`Evaluate`, `Execute`) wired into session command execution.
+- Engine API (`Evaluate`, `Execute`) wired into worker command execution.
 - L1/L2/L3 policy chain operational.
-- Hash-chained audit log integrated with session tracking.
+- Hash-chained audit log integrated with worker tracking.
 - Capability registry configured.
 - `jwork` results include policy decisions in metadata.
-
-#### 🎯T8.4 Intelligent routing
-
-- **Value**: 8
-- **Cost**: 8
-- **Weight**: 1.0 (value 8 / cost 8)
-- **Parent**: 🎯T8
-- **Depends on**: 🎯T8.1, 🎯T8.2
-- **Status**: identified
-- **Discovered**: 2026-03-14
-
-**Desired state:** The daemon routes incoming work to the best session
-based on context, scope overlap, and recency.
-
-**Acceptance criteria:**
-- Session metadata (target descriptions, scope, recency) indexed for
-  routing decisions.
-- Routing logic: match incoming targets to existing sessions.
-- Reactivation: spin up `claude -p` against existing transcripts.
-- Continuation support: related work routed to sessions with context.
-- Foreman emergence: detect busy scopes, spawn coordinators.
-
-#### 🎯T8.5 Metrics and analysis
-
-- **Value**: 5
-- **Cost**: 5
-- **Weight**: 1.0 (value 5 / cost 5)
-- **Parent**: 🎯T8
-- **Depends on**: 🎯T8.1
-- **Status**: identified
-- **Discovered**: 2026-03-14
-
-**Desired state:** Rich data capture enables model tier optimisation
-and system performance analysis.
-
-**Acceptance criteria:**
-- Per-session token counts, activation counts, outcomes recorded.
-- Routing decision logging and quality assessment.
-- Cost aggregation per target.
-- Dashboard analytics views.
-- Foundation data for haiku introduction decision.
 
 ### 🎯T9 Server-driven UI for mobile app
 
@@ -244,7 +209,7 @@ the UI without app rebuilds or redeployment.
 - **Value**: 13
 - **Cost**: 13
 - **Weight**: 1.0 (value 13 / cost 13)
-- **Status**: identified
+- **Status**: converging — `internal/sync/` compiles cleanly with SyncManager, wire framing, and state writes. iOS sqlpipe vendor exists. Protocol not yet converted to pure sqlpipe transport.
 - **Discovered**: 2026-03-15
 
 **Desired state:** All state synchronisation between jevond and the iOS
