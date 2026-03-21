@@ -60,6 +60,10 @@ final class Connection {
     /// Subscription IDs for auto-render queries.
     private var transcriptSubID: UInt64?
     private var stateSubID: UInt64?
+    /// Latest subscription results — the source of truth for Lua state
+    /// when syncPeer is active. Populated from subscription callbacks,
+    /// never from direct queries.
+    private var syncMessages: [[String: Any]] = []
 
     private var webSocket: URLSessionWebSocketTask?
     private var receiveTask: Task<Void, Never>?
@@ -97,6 +101,7 @@ final class Connection {
         syncPeer = nil
         transcriptSubID = nil
         stateSubID = nil
+        syncMessages = []
     }
 
     func send(_ text: String) {
@@ -542,36 +547,22 @@ final class Connection {
         default: isConnected = false
         }
 
-        // When syncPeer is active and has data, query the local replica DB.
-        // Fall through to in-memory state if the replica is empty (sync
-        // may not have completed yet).
-        if let syncPeer {
-            let msgs = syncPeer.query(
-                "SELECT role, content AS text, timestamp FROM sync_transcript ORDER BY rowid"
-            ) ?? []
-
-            if !msgs.isEmpty || messages.isEmpty {
-                let sessEntries = syncPeer.query(
-                    "SELECT * FROM sessions ORDER BY score DESC LIMIT 20"
-                ) ?? []
-
-                // Use in-memory state for status and streaming_text — the
-                // server_state DB table syncs asynchronously and may lag
-                // behind, causing stale "thinking" spinners and duplicate
-                // messages (streaming text shown alongside the completed
-                // transcript entry).
-                let status = serverState == .thinking ? "thinking" : "idle"
-                let streaming = streamingText
-
-                return [
-                    "connected": isConnected,
-                    "version": serverVersion,
-                    "status": status,
-                    "messages": msgs,
-                    "streaming_text": streaming,
-                    "sessions": sessEntries,
-                ]
-            }
+        // When syncPeer has delivered subscription data, use it.
+        // syncMessages is populated reactively from subscription callbacks
+        // — no direct queries. Falls through to in-memory state if
+        // subscriptions haven't fired yet (sync still in progress).
+        if syncPeer != nil, !syncMessages.isEmpty || messages.isEmpty {
+            return [
+                "connected": isConnected,
+                "version": serverVersion,
+                "status": serverState == .thinking ? "thinking" : "idle",
+                "messages": syncMessages,
+                "streaming_text": streamingText,
+                "sessions": sessions.map { s in
+                    ["id": s.id, "name": s.name, "status": s.status,
+                     "workdir": s.workdir, "active": s.active] as [String: Any]
+                },
+            ]
         }
 
         // Fallback: build from in-memory state.
@@ -677,20 +668,18 @@ final class Connection {
     }
 
     /// Subscribe to key queries so we re-render when data changes.
+    /// Results arrive via HandleResult.subscriptions after sync enters
+    /// Live state — no immediate evaluation.
     private func setupSubscriptions() {
         guard let syncPeer else { return }
 
-        if let result = syncPeer.subscribe(
-            "SELECT role, content, timestamp FROM sync_transcript ORDER BY rowid"
-        ) {
-            transcriptSubID = result.id
-        }
+        transcriptSubID = syncPeer.subscribe(
+            "SELECT role, content AS text, timestamp FROM sync_transcript ORDER BY rowid"
+        )
 
-        if let result = syncPeer.subscribe(
+        stateSubID = syncPeer.subscribe(
             "SELECT status, streaming_text, version FROM server_state WHERE id = 1"
-        ) {
-            stateSubID = result.id
-        }
+        )
     }
 
     /// Handle a binary WebSocket frame (sqlpipe sync protocol).
@@ -707,8 +696,19 @@ final class Connection {
             sendBinary(response)
         }
 
+        // Process subscription results.
+        var changed = false
+        for sub in result.subscriptions {
+            if sub.id == transcriptSubID {
+                syncMessages = queryResultToDicts(sub)
+                changed = true
+            } else if sub.id == stateSubID {
+                changed = true
+            }
+        }
+
         // Re-render if data changed or subscriptions fired.
-        if result.hasChanges || !result.subscriptions.isEmpty {
+        if result.hasChanges || changed {
             renderViews()
         }
     }
@@ -736,6 +736,17 @@ final class Connection {
             logger.error("sendRequest failed: \(error.localizedDescription)")
             // Fall back to JSON.
             sendToServer(action: type, value: payload)
+        }
+    }
+
+    /// Convert a QueryResult into the [[String: Any]] format Lua expects.
+    private func queryResultToDicts(_ qr: QueryResult) -> [[String: Any]] {
+        qr.rows.map { row in
+            var dict: [String: Any] = [:]
+            for (i, col) in qr.columns.enumerated() where i < row.count {
+                dict[col] = row[i].anyValue
+            }
+            return dict
         }
     }
 

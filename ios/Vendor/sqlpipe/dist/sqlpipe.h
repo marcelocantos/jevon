@@ -2,9 +2,9 @@
 // SPDX-License-Identifier: Apache-2.0
 #pragma once
 
-#define SQLPIPE_VERSION       "0.9.0"
+#define SQLPIPE_VERSION       "0.12.0"
 #define SQLPIPE_VERSION_MAJOR 0
-#define SQLPIPE_VERSION_MINOR 9
+#define SQLPIPE_VERSION_MINOR 12
 #define SQLPIPE_VERSION_PATCH 0
 
 #include <cstdint>
@@ -125,6 +125,7 @@ enum class LogLevel : uint8_t { Debug = 0, Info, Warn, Error };
 /// Callback for library log output. If not set, logs are silently discarded.
 using LogCallback = std::function<void(LogLevel level, std::string_view message)>;
 
+
 /// Called when a schema mismatch is detected during handshake.
 /// Receives (remote_fingerprint, local_fingerprint, remote_schema_sql).
 /// remote_schema_sql contains the remote side's sorted CREATE TABLE statements
@@ -171,8 +172,9 @@ public:
     QueryWatch(QueryWatch&&) noexcept;
     QueryWatch& operator=(QueryWatch&&) noexcept;
 
-    /// Register a query. Returns the current result immediately.
-    QueryResult subscribe(const std::string& sql);
+    /// Register a query subscription. Returns the subscription ID.
+    /// Results arrive via notify() — subscribe does not evaluate the query.
+    SubscriptionId subscribe(const std::string& sql);
 
     /// Remove a subscription.
     void unsubscribe(SubscriptionId id);
@@ -355,6 +357,12 @@ std::vector<std::uint8_t> serialize(const Message& msg);
 /// Deserialize a byte buffer (including the 4-byte length prefix) into a Message.
 Message deserialize(std::span<const std::uint8_t> buf);
 
+/// Callback invoked automatically when a write transaction commits on a
+/// Master's database. Receives the changeset messages ready to send.
+/// When set, the Master hooks into SQLite's commit notification so that
+/// callers never need to call flush() explicitly.
+using FlushCallback = std::function<void(const std::vector<Message>&)>;
+
 } // namespace sqlpipe
 
 // ── master.h ────────────────────────────────────────────────────
@@ -382,6 +390,12 @@ struct MasterConfig {
 
     /// Log callback. nullptr = discard all log output.
     LogCallback on_log = nullptr;
+
+    /// Automatic flush callback. When set, the Master hooks into SQLite's
+    /// commit notification and delivers changeset messages automatically
+    /// after each write transaction. No explicit flush() needed.
+    /// nullptr = manual flush only (caller must call flush()).
+    FlushCallback on_flush = nullptr;
 };
 
 /// The sending side of the replication protocol.
@@ -397,6 +411,10 @@ public:
     Master& operator=(const Master&) = delete;
     Master(Master&&) noexcept;
     Master& operator=(Master&&) noexcept;
+
+    /// Execute SQL on the master's database. If on_flush is set, any
+    /// committed changes are automatically delivered via the callback.
+    void exec(const std::string& sql);
 
     /// Call after committing a write transaction. Extracts the changeset,
     /// assigns a sequence number, and returns the messages to send to
@@ -480,10 +498,12 @@ public:
     /// loop when processing a burst of messages.
     HandleResult handle_messages(std::span<const Message> msgs);
 
-    /// Subscribe to a SQL query. Returns the current result immediately.
-    /// After each handle_message that changes a table the query reads from,
-    /// the updated result appears in HandleResult::subscriptions.
-    QueryResult subscribe(const std::string& sql);
+    /// Subscribe to a SQL query. Returns the subscription ID.
+    /// The initial result and subsequent updates arrive via
+    /// HandleResult::subscriptions — subscribe does not evaluate the query.
+    /// Before Live state, evaluation is deferred until sync completes.
+    /// After Live, the subscription is evaluated on the next handle_message.
+    SubscriptionId subscribe(const std::string& sql);
 
     /// Remove a subscription.
     void unsubscribe(SubscriptionId id);
@@ -600,11 +620,9 @@ public:
     /// Process an incoming PeerMessage from the remote peer.
     PeerHandleResult handle_message(const PeerMessage& msg);
 
-    /// Subscribe to a SQL query on the replica side. Returns the current
-    /// result immediately. After each handle_message that changes a table
-    /// the query reads from, the updated result appears in
-    /// PeerHandleResult::subscriptions.
-    QueryResult subscribe(const std::string& sql);
+    /// Subscribe to a SQL query on the replica side. Returns the
+    /// subscription ID. Results arrive via PeerHandleResult::subscriptions.
+    SubscriptionId subscribe(const std::string& sql);
 
     /// Remove a subscription.
     void unsubscribe(SubscriptionId id);

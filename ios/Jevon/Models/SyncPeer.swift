@@ -203,22 +203,18 @@ final class SyncPeer {
         return stripCountPrefix(buf)
     }
 
-    /// Subscribe to a SQL query. Returns the current result set.
-    /// The subscription fires on subsequent `handleMessage` calls when
-    /// the result set changes.
-    func subscribe(_ sql: String) -> QueryResult? {
+    /// Subscribe to a SQL query. Returns the subscription ID.
+    /// Results arrive via HandleResult.subscriptions after sync enters
+    /// Live state — subscribe does not evaluate the query immediately.
+    func subscribe(_ sql: String) -> UInt64? {
         guard let peer else { return nil }
-        var buf = sqlpipe_buf()
-        let err = sqlpipe_peer_subscribe(peer, sql, &buf)
-        defer { sqlpipe_free_buf(buf) }
+        var subID: UInt64 = 0
+        let err = sqlpipe_peer_subscribe(peer, sql, &subID)
         if err.code != 0 {
             logError(err, context: "subscribe(\(sql))")
             return nil
         }
-        guard buf.data != nil, buf.len > 0 else { return nil }
-        let bytes = UnsafeBufferPointer(start: buf.data, count: buf.len)
-        var offset = 0
-        return decodeQueryResult(bytes, offset: &offset)
+        return subID
     }
 
     /// Unsubscribe from a previously created subscription.
