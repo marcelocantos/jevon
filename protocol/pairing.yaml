@@ -1,0 +1,423 @@
+# Pairing ceremony protocol definition.
+# Source of truth for: Go runtime, Swift runtime, TLA+ spec, PlantUML diagram.
+
+name: PairingCeremony
+
+messages:
+  pair_begin:
+    from: cli
+    to: jevond
+    desc: POST /api/pair/begin
+  token_response:
+    from: jevond
+    to: cli
+    desc: '{instance_id, pairing_token}'
+  pair_hello:
+    from: ios
+    to: jevond
+    desc: ECDH pubkey + pairing token
+  pair_hello_ack:
+    from: jevond
+    to: ios
+    desc: ECDH pubkey
+  pair_confirm:
+    from: jevond
+    to: ios
+    desc: signal to compute and display code
+  waiting_for_code:
+    from: jevond
+    to: cli
+    desc: prompt for code entry
+  code_submit:
+    from: cli
+    to: jevond
+    desc: POST /api/pair/confirm
+  pair_complete:
+    from: jevond
+    to: ios
+    desc: encrypted device secret
+  pair_status:
+    from: jevond
+    to: cli
+    desc: 'status: paired'
+  auth_request:
+    from: ios
+    to: jevond
+    desc: encrypted auth with nonce
+  auth_ok:
+    from: jevond
+    to: ios
+    desc: session established
+
+actors:
+  jevond:
+    initial: Idle
+    transitions:
+      - from: Idle
+        to: GenerateToken
+        on: recv pair_begin
+        do: generate_token
+        updates:
+          current_token: '"tok_1"'
+          active_tokens: 'active_tokens \union {"tok_1"}'
+      - from: GenerateToken
+        to: RegisterRelay
+        on: token created
+        do: register_relay
+      - from: RegisterRelay
+        to: WaitingForClient
+        on: relay registered
+        sends:
+          - to: cli
+            msg: token_response
+            fields:
+              token: current_token
+              instance_id: '"inst_1"'
+      - from: WaitingForClient
+        to: DeriveSecret
+        on: recv pair_hello
+        guard: token_valid
+        do: derive_secret
+        updates:
+          received_client_pub: recv_msg.pubkey
+          server_ecdh_pub: '"server_pub"'
+          server_shared_key: 'DeriveKey("server_pub", recv_msg.pubkey)'
+          server_code: 'DeriveCode("server_pub", recv_msg.pubkey)'
+      - from: WaitingForClient
+        to: Idle
+        on: recv pair_hello
+        guard: token_invalid
+      - from: DeriveSecret
+        to: SendAck
+        on: ECDH complete
+        sends:
+          - to: ios
+            msg: pair_hello_ack
+            fields:
+              pubkey: server_ecdh_pub
+      - from: SendAck
+        to: WaitingForCode
+        on: signal code display
+        sends:
+          - to: ios
+            msg: pair_confirm
+          - to: cli
+            msg: waiting_for_code
+      - from: WaitingForCode
+        to: ValidateCode
+        on: recv code_submit
+        updates:
+          received_code: recv_msg.code
+      - from: ValidateCode
+        to: StorePaired
+        on: check code
+        guard: code_correct
+      - from: ValidateCode
+        to: Idle
+        on: check code
+        guard: code_wrong
+        updates:
+          code_attempts: code_attempts + 1
+      - from: StorePaired
+        to: Paired
+        on: finalise
+        do: store_device
+        sends:
+          - to: ios
+            msg: pair_complete
+            fields:
+              key: server_shared_key
+              secret: '"dev_secret_1"'
+          - to: cli
+            msg: pair_status
+            fields:
+              status: '"paired"'
+        updates:
+          device_secret: '"dev_secret_1"'
+          paired_devices: 'paired_devices \union {"device_1"}'
+          active_tokens: 'active_tokens \ {current_token}'
+          used_tokens: 'used_tokens \union {current_token}'
+      - from: Paired
+        to: AuthCheck
+        on: recv auth_request
+        updates:
+          received_device_id: recv_msg.device_id
+          received_auth_nonce: recv_msg.nonce
+      - from: AuthCheck
+        to: SessionActive
+        on: verify
+        guard: device_known
+        do: verify_device
+        sends:
+          - to: ios
+            msg: auth_ok
+        updates:
+          auth_nonces_used: 'auth_nonces_used \union {received_auth_nonce}'
+      - from: AuthCheck
+        to: Idle
+        on: verify
+        guard: device_unknown
+      - from: SessionActive
+        to: Paired
+        on: disconnect
+
+  ios:
+    initial: Idle
+    transitions:
+      - from: Idle
+        to: ScanQR
+        on: user scans QR
+      - from: ScanQR
+        to: ConnectRelay
+        on: QR parsed
+      - from: ConnectRelay
+        to: GenKeyPair
+        on: relay connected
+      - from: GenKeyPair
+        to: WaitAck
+        on: key pair generated
+        do: send_pair_hello
+        sends:
+          - to: jevond
+            msg: pair_hello
+            fields:
+              token: current_token
+              pubkey: '"client_pub"'
+      - from: WaitAck
+        to: E2EReady
+        on: recv pair_hello_ack
+        do: derive_secret
+        updates:
+          received_server_pub: recv_msg.pubkey
+          client_shared_key: 'DeriveKey("client_pub", recv_msg.pubkey)'
+      - from: E2EReady
+        to: ShowCode
+        on: recv pair_confirm
+        updates:
+          ios_code: 'DeriveCode(received_server_pub, "client_pub")'
+      - from: ShowCode
+        to: WaitPairComplete
+        on: code displayed
+      - from: WaitPairComplete
+        to: Paired
+        on: recv pair_complete
+        do: store_secret
+      - from: Paired
+        to: Reconnect
+        on: app launch
+      - from: Reconnect
+        to: SendAuth
+        on: relay connected
+        sends:
+          - to: jevond
+            msg: auth_request
+            fields:
+              device_id: '"device_1"'
+              secret: device_secret
+              nonce: '"nonce_1"'
+              key: client_shared_key
+      - from: SendAuth
+        to: SessionActive
+        on: recv auth_ok
+      - from: SessionActive
+        to: Paired
+        on: disconnect
+
+  cli:
+    initial: Idle
+    transitions:
+      - from: Idle
+        to: GetKey
+        on: jevon --init
+      - from: GetKey
+        to: BeginPair
+        on: key stored
+        sends:
+          - to: jevond
+            msg: pair_begin
+      - from: BeginPair
+        to: ShowQR
+        on: recv token_response
+      - from: ShowQR
+        to: PromptCode
+        on: recv waiting_for_code
+      - from: PromptCode
+        to: SubmitCode
+        on: user enters code
+        sends:
+          - to: jevond
+            msg: code_submit
+            fields:
+              code: ios_code
+      - from: SubmitCode
+        to: Done
+        on: recv pair_status
+
+vars:
+  current_token:
+    initial: '"none"'
+    desc: pairing token currently in play
+  active_tokens:
+    initial: '{}'
+    desc: set of valid (non-revoked) tokens
+  used_tokens:
+    initial: '{}'
+    desc: set of revoked tokens
+  server_ecdh_pub:
+    initial: '"none"'
+    desc: server ECDH public key
+  received_client_pub:
+    initial: '"none"'
+    desc: pubkey jevond received in pair_hello (may be adversary's)
+  received_server_pub:
+    initial: '"none"'
+    desc: pubkey ios received in pair_hello_ack (may be adversary's)
+  server_shared_key:
+    initial: '"none"'
+    desc: ECDH key derived by jevond
+  client_shared_key:
+    initial: '"none"'
+    desc: ECDH key derived by ios
+  server_code:
+    initial: '"none"'
+    desc: code computed by jevond from its view of the pubkeys
+  ios_code:
+    initial: '"none"'
+    desc: code computed by ios from its view of the pubkeys
+  received_code:
+    initial: '"none"'
+    desc: code received in code_submit
+  code_attempts:
+    initial: '0'
+    desc: failed code submission attempts
+  device_secret:
+    initial: '"none"'
+    desc: persistent device secret
+  paired_devices:
+    initial: '{}'
+    desc: device IDs that completed pairing
+  received_device_id:
+    initial: '"none"'
+    desc: device_id from auth_request
+  auth_nonces_used:
+    initial: '{}'
+    desc: set of consumed auth nonces
+  received_auth_nonce:
+    initial: '"none"'
+    desc: nonce from auth_request
+  adversary_keys:
+    initial: '{}'
+    desc: encryption keys the adversary knows
+  adv_ecdh_pub:
+    initial: '"adv_pub"'
+    desc: adversary's ECDH public key
+  adv_saved_client_pub:
+    initial: '"none"'
+    desc: real client pubkey saved during MitM
+  adv_saved_server_pub:
+    initial: '"none"'
+    desc: real server pubkey saved during MitM
+  recv_msg:
+    initial: '[type |-> "none"]'
+    desc: last received message (staging)
+
+guards:
+  token_valid: 'recv_msg.token \in active_tokens'
+  token_invalid: 'recv_msg.token \notin active_tokens'
+  code_correct: received_code = server_code
+  code_wrong: received_code /= server_code
+  device_known: 'received_device_id \in paired_devices'
+  device_unknown: 'received_device_id \notin paired_devices'
+  nonce_fresh: 'received_auth_nonce \notin auth_nonces_used'
+
+operators:
+  DeriveKey:
+    params: a, b
+    expr: 'IF a <= b THEN <<"ecdh", a, b>> ELSE <<"ecdh", b, a>>'
+    desc: 'Symbolic ECDH: deterministic key from two public keys (order-independent)'
+  DeriveCode:
+    params: a, b
+    expr: 'IF a <= b THEN <<"code", a, b>> ELSE <<"code", b, a>>'
+    desc: 'Key-bound confirmation code: deterministic from both pubkeys (order-independent)'
+
+adversary:
+  - name: QR_shoulder_surf
+    desc: observe QR code content (token + instance_id)
+    code: |
+      await current_token /= "none";
+      adversary_knowledge := adversary_knowledge \union {current_token};
+  - name: MitM_pair_hello
+    desc: intercept pair_hello and substitute adversary ECDH pubkey
+    code: |
+      await Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_pair_hello;
+      adv_saved_client_pub := Head(chan_ios_jevond).pubkey;
+      chan_ios_jevond := <<[type |-> MSG_pair_hello, token |-> Head(chan_ios_jevond).token, pubkey |-> adv_ecdh_pub]>> \o Tail(chan_ios_jevond);
+  - name: MitM_pair_hello_ack
+    desc: intercept pair_hello_ack and substitute adversary ECDH pubkey, derive both shared secrets
+    code: |
+      await Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_hello_ack;
+      adv_saved_server_pub := Head(chan_jevond_ios).pubkey;
+      adversary_keys := adversary_keys \union {DeriveKey(adv_ecdh_pub, adv_saved_server_pub), DeriveKey(adv_ecdh_pub, adv_saved_client_pub)};
+      chan_jevond_ios := <<[type |-> MSG_pair_hello_ack, pubkey |-> adv_ecdh_pub]>> \o Tail(chan_jevond_ios);
+  - name: MitM_reencrypt_secret
+    desc: decrypt pair_complete with MitM key, learn device secret
+    code: |
+      await Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_complete /\ Head(chan_jevond_ios).key \in adversary_keys;
+      with msg = Head(chan_jevond_ios) do
+        adversary_knowledge := adversary_knowledge \union {[type |-> "plaintext_secret", secret |-> msg.secret]};
+        chan_jevond_ios := <<[type |-> MSG_pair_complete, key |-> DeriveKey(adv_ecdh_pub, adv_saved_client_pub), secret |-> msg.secret]>> \o Tail(chan_jevond_ios);
+      end with;
+  - name: concurrent_pair
+    desc: race a forged pair_hello using shoulder-surfed token
+    code: |
+      await current_token \in adversary_knowledge;
+      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);
+  - name: token_bruteforce
+    desc: send pair_hello with fabricated token
+    code: |
+      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> "fake_token", pubkey |-> adv_ecdh_pub]);
+  - name: code_guess
+    desc: submit fabricated confirmation code via CLI channel
+    code: |
+      chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> "000000"]);
+  - name: session_replay
+    desc: replay captured auth_request with stale nonce
+    code: |
+      await \E m \in adversary_knowledge : m.type = MSG_auth_request;
+      with msg \in {m \in adversary_knowledge : m.type = MSG_auth_request} do
+        chan_ios_jevond := Append(chan_ios_jevond, msg);
+      end with;
+
+properties:
+  - name: NoTokenReuse
+    kind: invariant
+    expr: 'used_tokens \intersect active_tokens = {}'
+    desc: A revoked pairing token is never accepted again
+  - name: MitMDetectedByCodeMismatch
+    kind: invariant
+    expr: '(adversary_keys /= {} /\ server_code /= "none" /\ ios_code /= "none") => server_code /= ios_code'
+    desc: If MitM occurred (adversary has keys), the codes computed by each side differ
+  - name: MitMPrevented
+    kind: invariant
+    expr: 'adversary_keys /= {} => jevond_state \notin {jevond_StorePaired, jevond_Paired, jevond_AuthCheck, jevond_SessionActive}'
+    desc: If MitM occurred, pairing never completes (code mismatch aborts it)
+  - name: AuthRequiresCompletedPairing
+    kind: invariant
+    expr: 'jevond_state = jevond_SessionActive => received_device_id \in paired_devices'
+    desc: A session is only active for a device that completed pairing
+  - name: NoNonceReuse
+    kind: invariant
+    expr: 'jevond_state = jevond_SessionActive => received_auth_nonce \notin (auth_nonces_used \ {received_auth_nonce})'
+    desc: Each auth nonce is accepted at most once
+  - name: WrongCodeDoesNotPair
+    kind: invariant
+    expr: '(jevond_state = jevond_StorePaired \/ jevond_state = jevond_Paired) => received_code = server_code \/ received_code = "none"'
+    desc: Pairing only completes with the correct confirmation code
+  - name: DeviceSecretSecrecy
+    kind: invariant
+    expr: '\A m \in adversary_knowledge : m.type /= "plaintext_secret"'
+    desc: Adversary never learns the device secret in plaintext
+  - name: HonestPairingCompletes
+    kind: liveness
+    expr: 'cli_state = cli_Done /\ ios_state = ios_Paired'
+    desc: If all actors cooperate honestly (no MitM), pairing eventually completes

@@ -1,0 +1,65 @@
+@startuml PairingCeremony
+!theme plain
+
+title PairingCeremony — Parallel State Machines
+
+state "jevond" as D {
+  [*] --> D_Idle
+  D_Idle --> D_GenerateToken : recv pair_begin\ngenerate_token
+  D_GenerateToken --> D_RegisterRelay : token created\nregister_relay
+  D_RegisterRelay --> D_WaitingForClient : relay registered
+  D_WaitingForClient --> D_DeriveSecret : recv pair_hello\n[token_valid]\nderive_secret
+  D_WaitingForClient --> D_Idle : recv pair_hello\n[token_invalid]
+  D_DeriveSecret --> D_SendAck : ECDH complete
+  D_SendAck --> D_WaitingForCode : signal code display
+  D_WaitingForCode --> D_ValidateCode : recv code_submit
+  D_ValidateCode --> D_StorePaired : check code\n[code_correct]
+  D_ValidateCode --> D_Idle : check code\n[code_wrong]
+  D_StorePaired --> D_Paired : finalise\nstore_device
+  D_Paired --> D_AuthCheck : recv auth_request
+  D_AuthCheck --> D_SessionActive : verify\n[device_known]\nverify_device
+  D_AuthCheck --> D_Idle : verify\n[device_unknown]
+  D_SessionActive --> D_Paired : disconnect
+}
+
+state "ios" as A {
+  [*] --> A_Idle
+  A_Idle --> A_ScanQR : user scans QR
+  A_ScanQR --> A_ConnectRelay : QR parsed
+  A_ConnectRelay --> A_GenKeyPair : relay connected
+  A_GenKeyPair --> A_WaitAck : key pair generated\nsend_pair_hello
+  A_WaitAck --> A_E2EReady : recv pair_hello_ack\nderive_secret
+  A_E2EReady --> A_ShowCode : recv pair_confirm
+  A_ShowCode --> A_WaitPairComplete : code displayed
+  A_WaitPairComplete --> A_Paired : recv pair_complete\nstore_secret
+  A_Paired --> A_Reconnect : app launch
+  A_Reconnect --> A_SendAuth : relay connected
+  A_SendAuth --> A_SessionActive : recv auth_ok
+  A_SessionActive --> A_Paired : disconnect
+}
+
+state "cli" as C {
+  [*] --> C_Idle
+  C_Idle --> C_GetKey : jevon --init
+  C_GetKey --> C_BeginPair : key stored
+  C_BeginPair --> C_ShowQR : recv token_response
+  C_ShowQR --> C_PromptCode : recv waiting_for_code
+  C_PromptCode --> C_SubmitCode : user enters code
+  C_SubmitCode --> C_Done : recv pair_status
+}
+
+' === Cross-actor interactions ===
+
+D_RegisterRelay -[#blue,dashed]-> C_BeginPair : token_response\n{token, instance_id}
+D_DeriveSecret -[#green,dashed]-> A_WaitAck : pair_hello_ack\n{pubkey}
+D_SendAck -[#orange,dashed]-> A_E2EReady : pair_confirm
+D_SendAck -[#purple,dashed]-> C_ShowQR : waiting_for_code
+D_StorePaired -[#gray,dashed]-> A_WaitPairComplete : pair_complete\n{key, secret}
+D_StorePaired -[#red,dashed]-> C_SubmitCode : pair_status\n{status}
+D_AuthCheck -[#blue,dashed]-> A_SendAuth : auth_ok
+A_GenKeyPair -[#green,dashed]-> D_WaitingForClient : pair_hello\n{token, pubkey}
+A_Reconnect -[#orange,dashed]-> D_Paired : auth_request\n{secret, nonce, key, device_id}
+C_GetKey -[#purple,dashed]-> D_Idle : pair_begin
+C_PromptCode -[#gray,dashed]-> D_WaitingForCode : code_submit\n{code}
+
+@enduml
