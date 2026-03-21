@@ -273,20 +273,20 @@ vars:
     initial: '"none"'
     desc: pubkey ios received in pair_hello_ack (may be adversary's)
   server_shared_key:
-    initial: '"none"'
-    desc: ECDH key derived by jevond
+    initial: '<<"none">>'
+    desc: ECDH key derived by jevond (tuple to match DeriveKey output type)
   client_shared_key:
-    initial: '"none"'
-    desc: ECDH key derived by ios
+    initial: '<<"none">>'
+    desc: ECDH key derived by ios (tuple to match DeriveKey output type)
   server_code:
-    initial: '"none"'
-    desc: code computed by jevond from its view of the pubkeys
+    initial: '<<"none">>'
+    desc: code computed by jevond from its view of the pubkeys (tuple to match DeriveCode output type)
   ios_code:
-    initial: '"none"'
-    desc: code computed by ios from its view of the pubkeys
+    initial: '<<"none">>'
+    desc: code computed by ios from its view of the pubkeys (tuple to match DeriveCode output type)
   received_code:
-    initial: '"none"'
-    desc: code received in code_submit
+    initial: '<<"none">>'
+    desc: code received in code_submit (tuple to match DeriveCode output type)
   code_attempts:
     initial: '0'
     desc: failed code submission attempts
@@ -399,12 +399,12 @@ properties:
     desc: A revoked pairing token is never accepted again
   - name: MitMDetectedByCodeMismatch
     kind: invariant
-    expr: '(adversary_keys /= {} /\ jevond_state \notin {jevond_Idle, jevond_GenerateToken, jevond_RegisterRelay, jevond_WaitingForClient} /\ ios_state \notin {ios_Idle, ios_ScanQR, ios_ConnectRelay, ios_GenKeyPair, ios_WaitAck, ios_E2EReady}) => server_code /= ios_code'
-    desc: If MitM occurred and both sides computed codes, the codes differ
+    expr: '(server_shared_key \in adversary_keys /\ server_code /= <<"none">> /\ ios_code /= <<"none">>) => server_code /= ios_code'
+    desc: If the current session's shared key is compromised and both sides computed codes, the codes differ
   - name: MitMPrevented
     kind: invariant
-    expr: 'adversary_keys /= {} => jevond_state \notin {jevond_StorePaired, jevond_Paired, jevond_AuthCheck, jevond_SessionActive}'
-    desc: If MitM occurred, pairing never completes (code mismatch aborts it)
+    expr: 'server_shared_key \in adversary_keys => jevond_state \notin {jevond_StorePaired, jevond_Paired, jevond_AuthCheck, jevond_SessionActive}'
+    desc: If the current session's key is compromised, pairing never completes
   - name: AuthRequiresCompletedPairing
     kind: invariant
     expr: 'jevond_state = jevond_SessionActive => received_device_id \in paired_devices'
@@ -415,7 +415,7 @@ properties:
     desc: Each auth nonce is accepted at most once
   - name: WrongCodeDoesNotPair
     kind: invariant
-    expr: '(jevond_state = jevond_StorePaired \/ jevond_state = jevond_Paired) => received_code = server_code \/ received_code = "none"'
+    expr: '(jevond_state = jevond_StorePaired \/ jevond_state = jevond_Paired) => received_code = server_code \/ received_code = <<"none">>'
     desc: Pairing only completes with the correct confirmation code
   - name: DeviceSecretSecrecy
     kind: invariant
