@@ -36,3 +36,4 @@ DerivedData/
 # Claude Code local settings
 /.claude/
 sqlite_mcp_server.db
+relay
