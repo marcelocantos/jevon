@@ -96,6 +96,18 @@ init: ge/init
 	@echo "  Go dependencies downloaded"
 	$(ge/INIT_DONE)
 
+# ── Protocol codegen ────────────────────────────────
+PROTO_YAML := $(wildcard protocol/*.yaml)
+PROTO_GEN  := $(patsubst protocol/%.yaml,internal/protocol/%_gen.go,$(PROTO_YAML))
+
+.PHONY: protogen
+protogen: $(PROTO_GEN)
+
+$(PROTO_GEN): $(PROTO_YAML) cmd/protogen/main.go internal/protocol/yaml.go \
+              internal/protocol/gogen.go internal/protocol/tla.go \
+              internal/protocol/swift.go internal/protocol/plantuml.go
+	go run ./cmd/protogen $(PROTO_YAML)
+
 # ── iOS app ─────────────────────────────────────────
 .PHONY: ios
 ios:

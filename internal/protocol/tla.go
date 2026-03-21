@@ -26,8 +26,8 @@ func (p *Protocol) ExportTLA(w io.Writer) error {
 
 	writeStateConstants(&b, p)
 	writeMsgConstants(&b, p)
+	// Operators go before PlusCal — they are pure functions.
 	writeOperators(&b, p)
-	writeGuardDefs(&b, p)
 
 	// PlusCal algorithm.
 	b.WriteString("(*--algorithm ")
@@ -99,16 +99,8 @@ func writeOperators(b *strings.Builder, p *Protocol) {
 	b.WriteString("\n")
 }
 
-func writeGuardDefs(b *strings.Builder, p *Protocol) {
-	if len(p.Guards) == 0 {
-		return
-	}
-	b.WriteString("\\* Guard predicates\n")
-	for _, g := range p.Guards {
-		fmt.Fprintf(b, "%s == %s\n", sanitiseTLA(string(g.ID)), g.Expr)
-	}
-	b.WriteString("\n")
-}
+// Guard expressions are inlined into await clauses (see writeTransitionAwait)
+// to avoid TLA+ operator ordering issues with TRANSLATION-block variables.
 
 func writeVariables(b *strings.Builder, p *Protocol) {
 	b.WriteString("variables\n")
@@ -196,9 +188,27 @@ func writeTransitionAwait(b *strings.Builder, p *Protocol, a *Actor, t *Transiti
 	}
 
 	if t.Guard != "" {
-		fmt.Fprintf(b, " /\\ %s", sanitiseTLA(string(t.Guard)))
+		// Inline the guard expression. For recv transitions, substitute
+		// "recv_msg" with "Head(channel)" since at await-time the
+		// message hasn't been consumed into recv_msg yet.
+		expr := guardExpr(p, t.Guard)
+		if t.On.Kind == TriggerRecv {
+			fromActor := msgSender(p, t.On.Msg)
+			chanName := channelName(fromActor, a.Name)
+			expr = strings.ReplaceAll(expr, "recv_msg", "Head("+chanName+")")
+		}
+		fmt.Fprintf(b, " /\\ (%s)", expr)
 	}
 	b.WriteString(";\n")
+}
+
+func guardExpr(p *Protocol, id GuardID) string {
+	for _, g := range p.Guards {
+		if g.ID == id {
+			return g.Expr
+		}
+	}
+	return string(id) // fallback
 }
 
 func writeTransitionBody(b *strings.Builder, p *Protocol, a *Actor, t *Transition) {

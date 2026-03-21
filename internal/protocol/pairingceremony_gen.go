@@ -73,13 +73,13 @@ const (
 
 // Actions.
 const (
-	ActionGenerateToken ActionID = "generate_token"
-	ActionRegisterRelay ActionID = "register_relay"
 	ActionDeriveSecret ActionID = "derive_secret"
 	ActionStoreDevice ActionID = "store_device"
 	ActionVerifyDevice ActionID = "verify_device"
 	ActionSendPairHello ActionID = "send_pair_hello"
 	ActionStoreSecret ActionID = "store_secret"
+	ActionGenerateToken ActionID = "generate_token"
+	ActionRegisterRelay ActionID = "register_relay"
 )
 
 func PairingCeremony() *Protocol {
@@ -97,7 +97,7 @@ func PairingCeremony() *Protocol {
 				{From: "WaitingForCode", To: "ValidateCode", On: Recv("code_submit"), Updates: []VarUpdate{{Var: "received_code", Expr: "recv_msg.code"}, }},
 				{From: "ValidateCode", To: "StorePaired", On: Internal("check code"), Guard: "code_correct"},
 				{From: "ValidateCode", To: "Idle", On: Internal("check code"), Guard: "code_wrong", Updates: []VarUpdate{{Var: "code_attempts", Expr: "code_attempts + 1"}, }},
-				{From: "StorePaired", To: "Paired", On: Internal("finalise"), Do: "store_device", Sends: []Send{{To: "ios", Msg: "pair_complete", Fields: map[string]string{"secret": "\"dev_secret_1\"", "key": "server_shared_key", }}, {To: "cli", Msg: "pair_status", Fields: map[string]string{"status": "\"paired\"", }}, }, Updates: []VarUpdate{{Var: "device_secret", Expr: "\"dev_secret_1\""}, {Var: "paired_devices", Expr: "paired_devices \\union {\"device_1\"}"}, {Var: "active_tokens", Expr: "active_tokens \\ {current_token}"}, {Var: "used_tokens", Expr: "used_tokens \\union {current_token}"}, }},
+				{From: "StorePaired", To: "Paired", On: Internal("finalise"), Do: "store_device", Sends: []Send{{To: "ios", Msg: "pair_complete", Fields: map[string]string{"key": "server_shared_key", "secret": "\"dev_secret_1\"", }}, {To: "cli", Msg: "pair_status", Fields: map[string]string{"status": "\"paired\"", }}, }, Updates: []VarUpdate{{Var: "device_secret", Expr: "\"dev_secret_1\""}, {Var: "paired_devices", Expr: "paired_devices \\union {\"device_1\"}"}, {Var: "active_tokens", Expr: "active_tokens \\ {current_token}"}, {Var: "used_tokens", Expr: "used_tokens \\union {current_token}"}, }},
 				{From: "Paired", To: "AuthCheck", On: Recv("auth_request"), Updates: []VarUpdate{{Var: "received_device_id", Expr: "recv_msg.device_id"}, {Var: "received_auth_nonce", Expr: "recv_msg.nonce"}, }},
 				{From: "AuthCheck", To: "SessionActive", On: Internal("verify"), Guard: "device_known", Do: "verify_device", Sends: []Send{{To: "ios", Msg: "auth_ok"}, }, Updates: []VarUpdate{{Var: "auth_nonces_used", Expr: "auth_nonces_used \\union {received_auth_nonce}"}, }},
 				{From: "AuthCheck", To: "Idle", On: Internal("verify"), Guard: "device_unknown"},
@@ -173,27 +173,28 @@ func PairingCeremony() *Protocol {
 			{ID: "nonce_fresh", Expr: "received_auth_nonce \\notin auth_nonces_used"},
 		},
 		Operators: []Operator{
-			{Name: "DeriveKey", Params: "a, b", Expr: "IF a <= b THEN <<\"ecdh\", a, b>> ELSE <<\"ecdh\", b, a>>", Desc: "Symbolic ECDH: deterministic key from two public keys (order-independent)"},
-			{Name: "DeriveCode", Params: "a, b", Expr: "IF a <= b THEN <<\"code\", a, b>> ELSE <<\"code\", b, a>>", Desc: "Key-bound confirmation code: deterministic from both pubkeys (order-independent)"},
+			{Name: "KeyRank", Params: "k", Expr: "CASE k = \"adv_pub\" -> 0 [] k = \"client_pub\" -> 1 [] k = \"server_pub\" -> 2 [] OTHER -> 3", Desc: "Assign numeric rank to pubkey names for deterministic ordering"},
+			{Name: "DeriveKey", Params: "a, b", Expr: "IF KeyRank(a) <= KeyRank(b) THEN <<\"ecdh\", a, b>> ELSE <<\"ecdh\", b, a>>", Desc: "Symbolic ECDH: deterministic key from two public keys (order-independent)"},
+			{Name: "DeriveCode", Params: "a, b", Expr: "IF KeyRank(a) <= KeyRank(b) THEN <<\"code\", a, b>> ELSE <<\"code\", b, a>>", Desc: "Key-bound confirmation code: deterministic from both pubkeys (order-independent)"},
 		},
 		AdvActions: []AdvAction{
-			{Name: "QR_shoulder_surf", Desc: "observe QR code content (token + instance_id)", Code: "      await current_token /= \"none\";\n      adversary_knowledge := adversary_knowledge \\union {current_token};"},
+			{Name: "QR_shoulder_surf", Desc: "observe QR code content (token + instance_id)", Code: "      await current_token /= \"none\";\n      adversary_knowledge := adversary_knowledge \\union {[type |-> \"qr_token\", token |-> current_token]};"},
 			{Name: "MitM_pair_hello", Desc: "intercept pair_hello and substitute adversary ECDH pubkey", Code: "      await Len(chan_ios_jevond) > 0 /\\ Head(chan_ios_jevond).type = MSG_pair_hello;\n      adv_saved_client_pub := Head(chan_ios_jevond).pubkey;\n      chan_ios_jevond := <<[type |-> MSG_pair_hello, token |-> Head(chan_ios_jevond).token, pubkey |-> adv_ecdh_pub]>> \\o Tail(chan_ios_jevond);"},
 			{Name: "MitM_pair_hello_ack", Desc: "intercept pair_hello_ack and substitute adversary ECDH pubkey, derive both shared secrets", Code: "      await Len(chan_jevond_ios) > 0 /\\ Head(chan_jevond_ios).type = MSG_pair_hello_ack;\n      adv_saved_server_pub := Head(chan_jevond_ios).pubkey;\n      adversary_keys := adversary_keys \\union {DeriveKey(adv_ecdh_pub, adv_saved_server_pub), DeriveKey(adv_ecdh_pub, adv_saved_client_pub)};\n      chan_jevond_ios := <<[type |-> MSG_pair_hello_ack, pubkey |-> adv_ecdh_pub]>> \\o Tail(chan_jevond_ios);"},
 			{Name: "MitM_reencrypt_secret", Desc: "decrypt pair_complete with MitM key, learn device secret", Code: "      await Len(chan_jevond_ios) > 0 /\\ Head(chan_jevond_ios).type = MSG_pair_complete /\\ Head(chan_jevond_ios).key \\in adversary_keys;\n      with msg = Head(chan_jevond_ios) do\n        adversary_knowledge := adversary_knowledge \\union {[type |-> \"plaintext_secret\", secret |-> msg.secret]};\n        chan_jevond_ios := <<[type |-> MSG_pair_complete, key |-> DeriveKey(adv_ecdh_pub, adv_saved_client_pub), secret |-> msg.secret]>> \\o Tail(chan_jevond_ios);\n      end with;"},
-			{Name: "concurrent_pair", Desc: "race a forged pair_hello using shoulder-surfed token", Code: "      await current_token \\in adversary_knowledge;\n      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);"},
+			{Name: "concurrent_pair", Desc: "race a forged pair_hello using shoulder-surfed token", Code: "      await \\E m \\in adversary_knowledge : m = [type |-> \"qr_token\", token |-> current_token];\n      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);"},
 			{Name: "token_bruteforce", Desc: "send pair_hello with fabricated token", Code: "      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> \"fake_token\", pubkey |-> adv_ecdh_pub]);"},
-			{Name: "code_guess", Desc: "submit fabricated confirmation code via CLI channel", Code: "      chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> \"000000\"]);"},
+			{Name: "code_guess", Desc: "submit fabricated confirmation code via CLI channel", Code: "      chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<\"guess\", \"000000\">>]);"},
 			{Name: "session_replay", Desc: "replay captured auth_request with stale nonce", Code: "      await \\E m \\in adversary_knowledge : m.type = MSG_auth_request;\n      with msg \\in {m \\in adversary_knowledge : m.type = MSG_auth_request} do\n        chan_ios_jevond := Append(chan_ios_jevond, msg);\n      end with;"},
 		},
 		Properties: []Property{
 			{Name: "NoTokenReuse", Kind: 0, Expr: "used_tokens \\intersect active_tokens = {}", Desc: "A revoked pairing token is never accepted again"},
-			{Name: "MitMDetectedByCodeMismatch", Kind: 0, Expr: "(adversary_keys /= {} /\\ server_code /= \"none\" /\\ ios_code /= \"none\") => server_code /= ios_code", Desc: "If MitM occurred (adversary has keys), the codes computed by each side differ"},
+			{Name: "MitMDetectedByCodeMismatch", Kind: 0, Expr: "(adversary_keys /= {} /\\ jevond_state \\notin {jevond_Idle, jevond_GenerateToken, jevond_RegisterRelay, jevond_WaitingForClient} /\\ ios_state \\notin {ios_Idle, ios_ScanQR, ios_ConnectRelay, ios_GenKeyPair, ios_WaitAck, ios_E2EReady}) => server_code /= ios_code", Desc: "If MitM occurred and both sides computed codes, the codes differ"},
 			{Name: "MitMPrevented", Kind: 0, Expr: "adversary_keys /= {} => jevond_state \\notin {jevond_StorePaired, jevond_Paired, jevond_AuthCheck, jevond_SessionActive}", Desc: "If MitM occurred, pairing never completes (code mismatch aborts it)"},
 			{Name: "AuthRequiresCompletedPairing", Kind: 0, Expr: "jevond_state = jevond_SessionActive => received_device_id \\in paired_devices", Desc: "A session is only active for a device that completed pairing"},
 			{Name: "NoNonceReuse", Kind: 0, Expr: "jevond_state = jevond_SessionActive => received_auth_nonce \\notin (auth_nonces_used \\ {received_auth_nonce})", Desc: "Each auth nonce is accepted at most once"},
 			{Name: "WrongCodeDoesNotPair", Kind: 0, Expr: "(jevond_state = jevond_StorePaired \\/ jevond_state = jevond_Paired) => received_code = server_code \\/ received_code = \"none\"", Desc: "Pairing only completes with the correct confirmation code"},
-			{Name: "DeviceSecretSecrecy", Kind: 0, Expr: "\\A m \\in adversary_knowledge : m.type /= \"plaintext_secret\"", Desc: "Adversary never learns the device secret in plaintext"},
+			{Name: "DeviceSecretSecrecy", Kind: 0, Expr: "\\A m \\in adversary_knowledge : \"type\" \\in DOMAIN m => m.type /= \"plaintext_secret\"", Desc: "Adversary never learns the device secret in plaintext"},
 			{Name: "HonestPairingCompletes", Kind: 1, Expr: "cli_state = cli_Done /\\ ios_state = ios_Paired", Desc: "If all actors cooperate honestly (no MitM), pairing eventually completes"},
 		},
 	}

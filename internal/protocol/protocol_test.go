@@ -218,9 +218,11 @@ func TestExportTLA(t *testing.T) {
 		"operators": {
 			"DeriveKey(a, b)", "DeriveCode(a, b)",
 		},
-		"guards": {
-			"token_valid ==", "token_invalid ==",
-			"code_correct ==", "device_known ==", "nonce_fresh ==",
+		"guards_inlined": {
+			`.token \in active_tokens`,
+			`.token \notin active_tokens`,
+			"received_code = server_code",
+			`received_device_id \in paired_devices`,
 		},
 		"sends": {
 			"Append(chan_cli_jevond", "Append(chan_jevond_cli",

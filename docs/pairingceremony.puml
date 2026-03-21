@@ -58,7 +58,7 @@ D_StorePaired -[#gray,dashed]-> A_WaitPairComplete : pair_complete\n{key, secret
 D_StorePaired -[#red,dashed]-> C_SubmitCode : pair_status\n{status}
 D_AuthCheck -[#blue,dashed]-> A_SendAuth : auth_ok
 A_GenKeyPair -[#green,dashed]-> D_WaitingForClient : pair_hello\n{token, pubkey}
-A_Reconnect -[#orange,dashed]-> D_Paired : auth_request\n{secret, nonce, key, device_id}
+A_Reconnect -[#orange,dashed]-> D_Paired : auth_request\n{device_id, secret, nonce, key}
 C_GetKey -[#purple,dashed]-> D_Idle : pair_begin
 C_PromptCode -[#gray,dashed]-> D_WaitingForCode : code_submit\n{code}
 

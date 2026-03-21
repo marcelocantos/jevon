@@ -1,0 +1,35 @@
+#!/bin/bash
+# Run TLC model checker on a TLA+ spec with PlusCal translation.
+# Usage: ./tlc PairingCeremony [extra TLC flags...]
+
+set -euo pipefail
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+JAR="$SCRIPT_DIR/tla2tools.jar"
+
+if [ $# -lt 1 ]; then
+    echo "usage: $0 <ModuleName> [TLC flags...]" >&2
+    exit 1
+fi
+
+MODULE="$1"
+shift
+
+TLA_FILE="$SCRIPT_DIR/$MODULE.tla"
+CFG_FILE="$SCRIPT_DIR/$MODULE.cfg"
+
+if [ ! -f "$TLA_FILE" ]; then
+    echo "error: $TLA_FILE not found" >&2
+    exit 1
+fi
+
+echo "── Translating PlusCal ──"
+java -cp "$JAR" pcal.trans -nocfg "$TLA_FILE"
+
+echo ""
+echo "── Running TLC ──"
+java -cp "$JAR" tlc2.TLC \
+    -config "$CFG_FILE" \
+    -workers auto \
+    "$@" \
+    "$TLA_FILE"

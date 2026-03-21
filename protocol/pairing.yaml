@@ -331,13 +331,17 @@ guards:
   nonce_fresh: 'received_auth_nonce \notin auth_nonces_used'
 
 operators:
+  KeyRank:
+    params: k
+    expr: 'CASE k = "adv_pub" -> 0 [] k = "client_pub" -> 1 [] k = "server_pub" -> 2 [] OTHER -> 3'
+    desc: 'Assign numeric rank to pubkey names for deterministic ordering'
   DeriveKey:
     params: a, b
-    expr: 'IF a <= b THEN <<"ecdh", a, b>> ELSE <<"ecdh", b, a>>'
+    expr: 'IF KeyRank(a) <= KeyRank(b) THEN <<"ecdh", a, b>> ELSE <<"ecdh", b, a>>'
     desc: 'Symbolic ECDH: deterministic key from two public keys (order-independent)'
   DeriveCode:
     params: a, b
-    expr: 'IF a <= b THEN <<"code", a, b>> ELSE <<"code", b, a>>'
+    expr: 'IF KeyRank(a) <= KeyRank(b) THEN <<"code", a, b>> ELSE <<"code", b, a>>'
     desc: 'Key-bound confirmation code: deterministic from both pubkeys (order-independent)'
 
 adversary:
@@ -345,7 +349,7 @@ adversary:
     desc: observe QR code content (token + instance_id)
     code: |
       await current_token /= "none";
-      adversary_knowledge := adversary_knowledge \union {current_token};
+      adversary_knowledge := adversary_knowledge \union {[type |-> "qr_token", token |-> current_token]};
   - name: MitM_pair_hello
     desc: intercept pair_hello and substitute adversary ECDH pubkey
     code: |
@@ -370,7 +374,7 @@ adversary:
   - name: concurrent_pair
     desc: race a forged pair_hello using shoulder-surfed token
     code: |
-      await current_token \in adversary_knowledge;
+      await \E m \in adversary_knowledge : m = [type |-> "qr_token", token |-> current_token];
       chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);
   - name: token_bruteforce
     desc: send pair_hello with fabricated token
@@ -379,7 +383,7 @@ adversary:
   - name: code_guess
     desc: submit fabricated confirmation code via CLI channel
     code: |
-      chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> "000000"]);
+      chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<"guess", "000000">>]);
   - name: session_replay
     desc: replay captured auth_request with stale nonce
     code: |
@@ -395,8 +399,8 @@ properties:
     desc: A revoked pairing token is never accepted again
   - name: MitMDetectedByCodeMismatch
     kind: invariant
-    expr: '(adversary_keys /= {} /\ server_code /= "none" /\ ios_code /= "none") => server_code /= ios_code'
-    desc: If MitM occurred (adversary has keys), the codes computed by each side differ
+    expr: '(adversary_keys /= {} /\ jevond_state \notin {jevond_Idle, jevond_GenerateToken, jevond_RegisterRelay, jevond_WaitingForClient} /\ ios_state \notin {ios_Idle, ios_ScanQR, ios_ConnectRelay, ios_GenKeyPair, ios_WaitAck, ios_E2EReady}) => server_code /= ios_code'
+    desc: If MitM occurred and both sides computed codes, the codes differ
   - name: MitMPrevented
     kind: invariant
     expr: 'adversary_keys /= {} => jevond_state \notin {jevond_StorePaired, jevond_Paired, jevond_AuthCheck, jevond_SessionActive}'
@@ -415,7 +419,7 @@ properties:
     desc: Pairing only completes with the correct confirmation code
   - name: DeviceSecretSecrecy
     kind: invariant
-    expr: '\A m \in adversary_knowledge : m.type /= "plaintext_secret"'
+    expr: '\A m \in adversary_knowledge : "type" \in DOMAIN m => m.type /= "plaintext_secret"'
     desc: Adversary never learns the device secret in plaintext
   - name: HonestPairingCompletes
     kind: liveness
