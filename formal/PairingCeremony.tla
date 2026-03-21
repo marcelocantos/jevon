@@ -121,7 +121,6 @@ variables
 fair process jevond = 1
 begin
   jevond_loop:
-  while TRUE do
     either
       \* Idle -> GenerateToken on pair_begin
       await jevond_state = jevond_Idle /\ Len(chan_cli_jevond) > 0 /\ Head(chan_cli_jevond).type = MSG_pair_begin;
@@ -215,13 +214,11 @@ begin
       await jevond_state = jevond_SessionActive;
       jevond_state := jevond_Paired;
     end either;
-  end while;
 end process;
 
 fair process ios = 2
 begin
   ios_loop:
-  while TRUE do
     either
       \* Idle -> ScanQR (user scans QR)
       await ios_state = ios_Idle;
@@ -284,13 +281,11 @@ begin
       await ios_state = ios_SessionActive;
       ios_state := ios_Paired;
     end either;
-  end while;
 end process;
 
 fair process cli = 3
 begin
   cli_loop:
-  while TRUE do
     either
       \* Idle -> GetKey (jevon --init)
       await cli_state = cli_Idle;
@@ -324,7 +319,6 @@ begin
       chan_jevond_cli := Tail(chan_jevond_cli);
       cli_state := cli_Done;
     end either;
-  end while;
 end process;
 
 \* Dolev-Yao adversary: controls the network.
@@ -347,7 +341,7 @@ begin
       chan_cli_jevond := Tail(chan_cli_jevond);
     or
       \* Replay into cli -> jevond
-      await adversary_knowledge /= {};
+      await adversary_knowledge /= {} /\ Len(chan_cli_jevond) < 3;
       with msg \in adversary_knowledge do
         chan_cli_jevond := Append(chan_cli_jevond, msg);
       end with;
@@ -361,7 +355,7 @@ begin
       chan_ios_jevond := Tail(chan_ios_jevond);
     or
       \* Replay into ios -> jevond
-      await adversary_knowledge /= {};
+      await adversary_knowledge /= {} /\ Len(chan_ios_jevond) < 3;
       with msg \in adversary_knowledge do
         chan_ios_jevond := Append(chan_ios_jevond, msg);
       end with;
@@ -375,7 +369,7 @@ begin
       chan_jevond_cli := Tail(chan_jevond_cli);
     or
       \* Replay into jevond -> cli
-      await adversary_knowledge /= {};
+      await adversary_knowledge /= {} /\ Len(chan_jevond_cli) < 3;
       with msg \in adversary_knowledge do
         chan_jevond_cli := Append(chan_jevond_cli, msg);
       end with;
@@ -389,7 +383,7 @@ begin
       chan_jevond_ios := Tail(chan_jevond_ios);
     or
       \* Replay into jevond -> ios
-      await adversary_knowledge /= {};
+      await adversary_knowledge /= {} /\ Len(chan_jevond_ios) < 3;
       with msg \in adversary_knowledge do
         chan_jevond_ios := Append(chan_jevond_ios, msg);
       end with;
@@ -418,15 +412,19 @@ begin
     or
       \* concurrent_pair: race a forged pair_hello using shoulder-surfed token
       await \E m \in adversary_knowledge : m = [type |-> "qr_token", token |-> current_token];
+      await Len(chan_ios_jevond) < 3;
       chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);
     or
       \* token_bruteforce: send pair_hello with fabricated token
+      await Len(chan_ios_jevond) < 3;
       chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> "fake_token", pubkey |-> adv_ecdh_pub]);
     or
       \* code_guess: submit fabricated confirmation code via CLI channel
+      await Len(chan_cli_jevond) < 3;
       chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<"guess", "000000">>]);
     or
       \* session_replay: replay captured auth_request with stale nonce
+      await Len(chan_ios_jevond) < 3;
       await \E m \in adversary_knowledge : m.type = MSG_auth_request;
       with msg \in {m \in adversary_knowledge : m.type = MSG_auth_request} do
         chan_ios_jevond := Append(chan_ios_jevond, msg);
@@ -437,7 +435,7 @@ end process;
 
 end algorithm; *)
 \* BEGIN TRANSLATION
-VARIABLES jevond_state, ios_state, cli_state, chan_cli_jevond, 
+VARIABLES pc, jevond_state, ios_state, cli_state, chan_cli_jevond, 
           chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, 
           adversary_knowledge, current_token, active_tokens, used_tokens, 
           server_ecdh_pub, received_client_pub, received_server_pub, 
@@ -447,7 +445,7 @@ VARIABLES jevond_state, ios_state, cli_state, chan_cli_jevond,
           adversary_keys, adv_ecdh_pub, adv_saved_client_pub, 
           adv_saved_server_pub, recv_msg
 
-vars == << jevond_state, ios_state, cli_state, chan_cli_jevond, 
+vars == << pc, jevond_state, ios_state, cli_state, chan_cli_jevond, 
            chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, 
            adversary_knowledge, current_token, active_tokens, used_tokens, 
            server_ecdh_pub, received_client_pub, received_server_pub, 
@@ -490,261 +488,288 @@ Init == (* Global variables *)
         /\ adv_saved_client_pub = "none"
         /\ adv_saved_server_pub = "none"
         /\ recv_msg = [type |-> "none"]
+        /\ pc = [self \in ProcSet |-> CASE self = 1 -> "jevond_loop"
+                                        [] self = 2 -> "ios_loop"
+                                        [] self = 3 -> "cli_loop"
+                                        [] self = 4 -> "adv_loop"]
 
-jevond == /\ \/ /\ jevond_state = jevond_Idle /\ Len(chan_cli_jevond) > 0 /\ Head(chan_cli_jevond).type = MSG_pair_begin
-                /\ recv_msg' = Head(chan_cli_jevond)
-                /\ chan_cli_jevond' = Tail(chan_cli_jevond)
-                /\ current_token' = "tok_1"
-                /\ active_tokens' = (active_tokens \union {"tok_1"})
-                /\ jevond_state' = jevond_GenerateToken
-                /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
-             \/ /\ jevond_state = jevond_GenerateToken
-                /\ jevond_state' = jevond_RegisterRelay
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_RegisterRelay
-                /\ chan_jevond_cli' = Append(chan_jevond_cli, [type |-> MSG_token_response, instance_id |-> "inst_1", token |-> current_token])
-                /\ jevond_state' = jevond_WaitingForClient
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_WaitingForClient /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_pair_hello /\ (Head(chan_ios_jevond).token \in active_tokens)
-                /\ recv_msg' = Head(chan_ios_jevond)
-                /\ chan_ios_jevond' = Tail(chan_ios_jevond)
-                /\ received_client_pub' = recv_msg'.pubkey
-                /\ server_ecdh_pub' = "server_pub"
-                /\ server_shared_key' = DeriveKey("server_pub", recv_msg'.pubkey)
-                /\ server_code' = DeriveCode("server_pub", recv_msg'.pubkey)
-                /\ jevond_state' = jevond_DeriveSecret
-                /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
-             \/ /\ jevond_state = jevond_WaitingForClient /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_pair_hello /\ (Head(chan_ios_jevond).token \notin active_tokens)
-                /\ recv_msg' = Head(chan_ios_jevond)
-                /\ chan_ios_jevond' = Tail(chan_ios_jevond)
-                /\ jevond_state' = jevond_Idle
-                /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
-             \/ /\ jevond_state = jevond_DeriveSecret
-                /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_pair_hello_ack, pubkey |-> server_ecdh_pub])
-                /\ jevond_state' = jevond_SendAck
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_SendAck
-                /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_pair_confirm])
-                /\ chan_jevond_cli' = Append(chan_jevond_cli, [type |-> MSG_waiting_for_code])
-                /\ jevond_state' = jevond_WaitingForCode
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_WaitingForCode /\ Len(chan_cli_jevond) > 0 /\ Head(chan_cli_jevond).type = MSG_code_submit
-                /\ recv_msg' = Head(chan_cli_jevond)
-                /\ chan_cli_jevond' = Tail(chan_cli_jevond)
-                /\ received_code' = recv_msg'.code
-                /\ jevond_state' = jevond_ValidateCode
-                /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
-             \/ /\ jevond_state = jevond_ValidateCode /\ (received_code = server_code)
-                /\ jevond_state' = jevond_StorePaired
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_ValidateCode /\ (received_code /= server_code)
-                /\ code_attempts' = code_attempts + 1
-                /\ jevond_state' = jevond_Idle
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_StorePaired
-                /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_pair_complete, key |-> server_shared_key, secret |-> "dev_secret_1"])
-                /\ chan_jevond_cli' = Append(chan_jevond_cli, [type |-> MSG_pair_status, status |-> "paired"])
-                /\ device_secret' = "dev_secret_1"
-                /\ paired_devices' = (paired_devices \union {"device_1"})
-                /\ active_tokens' = active_tokens \ {current_token}
-                /\ used_tokens' = (used_tokens \union {current_token})
-                /\ jevond_state' = jevond_Paired
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, current_token, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_Paired /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_auth_request
-                /\ recv_msg' = Head(chan_ios_jevond)
-                /\ chan_ios_jevond' = Tail(chan_ios_jevond)
-                /\ received_device_id' = recv_msg'.device_id
-                /\ received_auth_nonce' = recv_msg'.nonce
-                /\ jevond_state' = jevond_AuthCheck
-                /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, auth_nonces_used>>
-             \/ /\ jevond_state = jevond_AuthCheck /\ (received_device_id \in paired_devices)
-                /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_auth_ok])
-                /\ auth_nonces_used' = (auth_nonces_used \union {received_auth_nonce})
-                /\ jevond_state' = jevond_SessionActive
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_AuthCheck /\ (received_device_id \notin paired_devices)
-                /\ jevond_state' = jevond_Idle
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-             \/ /\ jevond_state = jevond_SessionActive
-                /\ jevond_state' = jevond_Paired
-                /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
-          /\ UNCHANGED << ios_state, cli_state, adversary_knowledge, 
-                          received_server_pub, client_shared_key, ios_code, 
-                          adversary_keys, adv_ecdh_pub, adv_saved_client_pub, 
-                          adv_saved_server_pub >>
+jevond_loop == /\ pc[1] = "jevond_loop"
+               /\ \/ /\ jevond_state = jevond_Idle /\ Len(chan_cli_jevond) > 0 /\ Head(chan_cli_jevond).type = MSG_pair_begin
+                     /\ recv_msg' = Head(chan_cli_jevond)
+                     /\ chan_cli_jevond' = Tail(chan_cli_jevond)
+                     /\ current_token' = "tok_1"
+                     /\ active_tokens' = (active_tokens \union {"tok_1"})
+                     /\ jevond_state' = jevond_GenerateToken
+                     /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
+                  \/ /\ jevond_state = jevond_GenerateToken
+                     /\ jevond_state' = jevond_RegisterRelay
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_RegisterRelay
+                     /\ chan_jevond_cli' = Append(chan_jevond_cli, [type |-> MSG_token_response, instance_id |-> "inst_1", token |-> current_token])
+                     /\ jevond_state' = jevond_WaitingForClient
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_WaitingForClient /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_pair_hello /\ (Head(chan_ios_jevond).token \in active_tokens)
+                     /\ recv_msg' = Head(chan_ios_jevond)
+                     /\ chan_ios_jevond' = Tail(chan_ios_jevond)
+                     /\ received_client_pub' = recv_msg'.pubkey
+                     /\ server_ecdh_pub' = "server_pub"
+                     /\ server_shared_key' = DeriveKey("server_pub", recv_msg'.pubkey)
+                     /\ server_code' = DeriveCode("server_pub", recv_msg'.pubkey)
+                     /\ jevond_state' = jevond_DeriveSecret
+                     /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
+                  \/ /\ jevond_state = jevond_WaitingForClient /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_pair_hello /\ (Head(chan_ios_jevond).token \notin active_tokens)
+                     /\ recv_msg' = Head(chan_ios_jevond)
+                     /\ chan_ios_jevond' = Tail(chan_ios_jevond)
+                     /\ jevond_state' = jevond_Idle
+                     /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
+                  \/ /\ jevond_state = jevond_DeriveSecret
+                     /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_pair_hello_ack, pubkey |-> server_ecdh_pub])
+                     /\ jevond_state' = jevond_SendAck
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_SendAck
+                     /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_pair_confirm])
+                     /\ chan_jevond_cli' = Append(chan_jevond_cli, [type |-> MSG_waiting_for_code])
+                     /\ jevond_state' = jevond_WaitingForCode
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_WaitingForCode /\ Len(chan_cli_jevond) > 0 /\ Head(chan_cli_jevond).type = MSG_code_submit
+                     /\ recv_msg' = Head(chan_cli_jevond)
+                     /\ chan_cli_jevond' = Tail(chan_cli_jevond)
+                     /\ received_code' = recv_msg'.code
+                     /\ jevond_state' = jevond_ValidateCode
+                     /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce>>
+                  \/ /\ jevond_state = jevond_ValidateCode /\ (received_code = server_code)
+                     /\ jevond_state' = jevond_StorePaired
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_ValidateCode /\ (received_code /= server_code)
+                     /\ code_attempts' = code_attempts + 1
+                     /\ jevond_state' = jevond_Idle
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_StorePaired
+                     /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_pair_complete, key |-> server_shared_key, secret |-> "dev_secret_1"])
+                     /\ chan_jevond_cli' = Append(chan_jevond_cli, [type |-> MSG_pair_status, status |-> "paired"])
+                     /\ device_secret' = "dev_secret_1"
+                     /\ paired_devices' = (paired_devices \union {"device_1"})
+                     /\ active_tokens' = active_tokens \ {current_token}
+                     /\ used_tokens' = (used_tokens \union {current_token})
+                     /\ jevond_state' = jevond_Paired
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, current_token, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_Paired /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_auth_request
+                     /\ recv_msg' = Head(chan_ios_jevond)
+                     /\ chan_ios_jevond' = Tail(chan_ios_jevond)
+                     /\ received_device_id' = recv_msg'.device_id
+                     /\ received_auth_nonce' = recv_msg'.nonce
+                     /\ jevond_state' = jevond_AuthCheck
+                     /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, auth_nonces_used>>
+                  \/ /\ jevond_state = jevond_AuthCheck /\ (received_device_id \in paired_devices)
+                     /\ chan_jevond_ios' = Append(chan_jevond_ios, [type |-> MSG_auth_ok])
+                     /\ auth_nonces_used' = (auth_nonces_used \union {received_auth_nonce})
+                     /\ jevond_state' = jevond_SessionActive
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_AuthCheck /\ (received_device_id \notin paired_devices)
+                     /\ jevond_state' = jevond_Idle
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+                  \/ /\ jevond_state = jevond_SessionActive
+                     /\ jevond_state' = jevond_Paired
+                     /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, current_token, active_tokens, used_tokens, server_ecdh_pub, received_client_pub, server_shared_key, server_code, received_code, code_attempts, device_secret, paired_devices, received_device_id, auth_nonces_used, received_auth_nonce, recv_msg>>
+               /\ pc' = [pc EXCEPT ![1] = "Done"]
+               /\ UNCHANGED << ios_state, cli_state, adversary_knowledge, 
+                               received_server_pub, client_shared_key, 
+                               ios_code, adversary_keys, adv_ecdh_pub, 
+                               adv_saved_client_pub, adv_saved_server_pub >>
 
-ios == /\ \/ /\ ios_state = ios_Idle
-             /\ ios_state' = ios_ScanQR
-             /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-          \/ /\ ios_state = ios_ScanQR
-             /\ ios_state' = ios_ConnectRelay
-             /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-          \/ /\ ios_state = ios_ConnectRelay
-             /\ ios_state' = ios_GenKeyPair
-             /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-          \/ /\ ios_state = ios_GenKeyPair
-             /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_pair_hello, pubkey |-> "client_pub", token |-> current_token])
-             /\ ios_state' = ios_WaitAck
-             /\ UNCHANGED <<chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-          \/ /\ ios_state = ios_WaitAck /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_hello_ack
-             /\ recv_msg' = Head(chan_jevond_ios)
-             /\ chan_jevond_ios' = Tail(chan_jevond_ios)
-             /\ received_server_pub' = recv_msg'.pubkey
-             /\ client_shared_key' = DeriveKey("client_pub", recv_msg'.pubkey)
-             /\ ios_state' = ios_E2EReady
-             /\ UNCHANGED <<chan_ios_jevond, ios_code>>
-          \/ /\ ios_state = ios_E2EReady /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_confirm
-             /\ recv_msg' = Head(chan_jevond_ios)
-             /\ chan_jevond_ios' = Tail(chan_jevond_ios)
-             /\ ios_code' = DeriveCode(received_server_pub, "client_pub")
-             /\ ios_state' = ios_ShowCode
-             /\ UNCHANGED <<chan_ios_jevond, received_server_pub, client_shared_key>>
-          \/ /\ ios_state = ios_ShowCode
-             /\ ios_state' = ios_WaitPairComplete
-             /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-          \/ /\ ios_state = ios_WaitPairComplete /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_complete
-             /\ recv_msg' = Head(chan_jevond_ios)
-             /\ chan_jevond_ios' = Tail(chan_jevond_ios)
-             /\ ios_state' = ios_Paired
-             /\ UNCHANGED <<chan_ios_jevond, received_server_pub, client_shared_key, ios_code>>
-          \/ /\ ios_state = ios_Paired
-             /\ ios_state' = ios_Reconnect
-             /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-          \/ /\ ios_state = ios_Reconnect
-             /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_auth_request, device_id |-> "device_1", key |-> client_shared_key, nonce |-> "nonce_1", secret |-> device_secret])
-             /\ ios_state' = ios_SendAuth
-             /\ UNCHANGED <<chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-          \/ /\ ios_state = ios_SendAuth /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_auth_ok
-             /\ recv_msg' = Head(chan_jevond_ios)
-             /\ chan_jevond_ios' = Tail(chan_jevond_ios)
-             /\ ios_state' = ios_SessionActive
-             /\ UNCHANGED <<chan_ios_jevond, received_server_pub, client_shared_key, ios_code>>
-          \/ /\ ios_state = ios_SessionActive
-             /\ ios_state' = ios_Paired
-             /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
-       /\ UNCHANGED << jevond_state, cli_state, chan_cli_jevond, 
-                       chan_jevond_cli, adversary_knowledge, current_token, 
-                       active_tokens, used_tokens, server_ecdh_pub, 
-                       received_client_pub, server_shared_key, server_code, 
-                       received_code, code_attempts, device_secret, 
-                       paired_devices, received_device_id, auth_nonces_used, 
-                       received_auth_nonce, adversary_keys, adv_ecdh_pub, 
-                       adv_saved_client_pub, adv_saved_server_pub >>
+jevond == jevond_loop
 
-cli == /\ \/ /\ cli_state = cli_Idle
-             /\ cli_state' = cli_GetKey
-             /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, recv_msg>>
-          \/ /\ cli_state = cli_GetKey
-             /\ chan_cli_jevond' = Append(chan_cli_jevond, [type |-> MSG_pair_begin])
-             /\ cli_state' = cli_BeginPair
-             /\ UNCHANGED <<chan_jevond_cli, recv_msg>>
-          \/ /\ cli_state = cli_BeginPair /\ Len(chan_jevond_cli) > 0 /\ Head(chan_jevond_cli).type = MSG_token_response
-             /\ recv_msg' = Head(chan_jevond_cli)
-             /\ chan_jevond_cli' = Tail(chan_jevond_cli)
-             /\ cli_state' = cli_ShowQR
-             /\ UNCHANGED chan_cli_jevond
-          \/ /\ cli_state = cli_ShowQR /\ Len(chan_jevond_cli) > 0 /\ Head(chan_jevond_cli).type = MSG_waiting_for_code
-             /\ recv_msg' = Head(chan_jevond_cli)
-             /\ chan_jevond_cli' = Tail(chan_jevond_cli)
-             /\ cli_state' = cli_PromptCode
-             /\ UNCHANGED chan_cli_jevond
-          \/ /\ cli_state = cli_PromptCode
-             /\ chan_cli_jevond' = Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> ios_code])
-             /\ cli_state' = cli_SubmitCode
-             /\ UNCHANGED <<chan_jevond_cli, recv_msg>>
-          \/ /\ cli_state = cli_SubmitCode /\ Len(chan_jevond_cli) > 0 /\ Head(chan_jevond_cli).type = MSG_pair_status
-             /\ recv_msg' = Head(chan_jevond_cli)
-             /\ chan_jevond_cli' = Tail(chan_jevond_cli)
-             /\ cli_state' = cli_Done
-             /\ UNCHANGED chan_cli_jevond
-       /\ UNCHANGED << jevond_state, ios_state, chan_ios_jevond, 
-                       chan_jevond_ios, adversary_knowledge, current_token, 
-                       active_tokens, used_tokens, server_ecdh_pub, 
-                       received_client_pub, received_server_pub, 
-                       server_shared_key, client_shared_key, server_code, 
-                       ios_code, received_code, code_attempts, device_secret, 
-                       paired_devices, received_device_id, auth_nonces_used, 
-                       received_auth_nonce, adversary_keys, adv_ecdh_pub, 
-                       adv_saved_client_pub, adv_saved_server_pub >>
+ios_loop == /\ pc[2] = "ios_loop"
+            /\ \/ /\ ios_state = ios_Idle
+                  /\ ios_state' = ios_ScanQR
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+               \/ /\ ios_state = ios_ScanQR
+                  /\ ios_state' = ios_ConnectRelay
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+               \/ /\ ios_state = ios_ConnectRelay
+                  /\ ios_state' = ios_GenKeyPair
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+               \/ /\ ios_state = ios_GenKeyPair
+                  /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_pair_hello, pubkey |-> "client_pub", token |-> current_token])
+                  /\ ios_state' = ios_WaitAck
+                  /\ UNCHANGED <<chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+               \/ /\ ios_state = ios_WaitAck /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_hello_ack
+                  /\ recv_msg' = Head(chan_jevond_ios)
+                  /\ chan_jevond_ios' = Tail(chan_jevond_ios)
+                  /\ received_server_pub' = recv_msg'.pubkey
+                  /\ client_shared_key' = DeriveKey("client_pub", recv_msg'.pubkey)
+                  /\ ios_state' = ios_E2EReady
+                  /\ UNCHANGED <<chan_ios_jevond, ios_code>>
+               \/ /\ ios_state = ios_E2EReady /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_confirm
+                  /\ recv_msg' = Head(chan_jevond_ios)
+                  /\ chan_jevond_ios' = Tail(chan_jevond_ios)
+                  /\ ios_code' = DeriveCode(received_server_pub, "client_pub")
+                  /\ ios_state' = ios_ShowCode
+                  /\ UNCHANGED <<chan_ios_jevond, received_server_pub, client_shared_key>>
+               \/ /\ ios_state = ios_ShowCode
+                  /\ ios_state' = ios_WaitPairComplete
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+               \/ /\ ios_state = ios_WaitPairComplete /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_complete
+                  /\ recv_msg' = Head(chan_jevond_ios)
+                  /\ chan_jevond_ios' = Tail(chan_jevond_ios)
+                  /\ ios_state' = ios_Paired
+                  /\ UNCHANGED <<chan_ios_jevond, received_server_pub, client_shared_key, ios_code>>
+               \/ /\ ios_state = ios_Paired
+                  /\ ios_state' = ios_Reconnect
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+               \/ /\ ios_state = ios_Reconnect
+                  /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_auth_request, device_id |-> "device_1", key |-> client_shared_key, nonce |-> "nonce_1", secret |-> device_secret])
+                  /\ ios_state' = ios_SendAuth
+                  /\ UNCHANGED <<chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+               \/ /\ ios_state = ios_SendAuth /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_auth_ok
+                  /\ recv_msg' = Head(chan_jevond_ios)
+                  /\ chan_jevond_ios' = Tail(chan_jevond_ios)
+                  /\ ios_state' = ios_SessionActive
+                  /\ UNCHANGED <<chan_ios_jevond, received_server_pub, client_shared_key, ios_code>>
+               \/ /\ ios_state = ios_SessionActive
+                  /\ ios_state' = ios_Paired
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_ios, received_server_pub, client_shared_key, ios_code, recv_msg>>
+            /\ pc' = [pc EXCEPT ![2] = "Done"]
+            /\ UNCHANGED << jevond_state, cli_state, chan_cli_jevond, 
+                            chan_jevond_cli, adversary_knowledge, 
+                            current_token, active_tokens, used_tokens, 
+                            server_ecdh_pub, received_client_pub, 
+                            server_shared_key, server_code, received_code, 
+                            code_attempts, device_secret, paired_devices, 
+                            received_device_id, auth_nonces_used, 
+                            received_auth_nonce, adversary_keys, adv_ecdh_pub, 
+                            adv_saved_client_pub, adv_saved_server_pub >>
 
-Adversary == /\ \/ /\ TRUE
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_cli_jevond) > 0
-                   /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_cli_jevond)})
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_cli_jevond) > 0
-                   /\ chan_cli_jevond' = Tail(chan_cli_jevond)
-                   /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ adversary_knowledge /= {}
-                   /\ \E msg \in adversary_knowledge:
-                        chan_cli_jevond' = Append(chan_cli_jevond, msg)
-                   /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_ios_jevond) > 0
-                   /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_ios_jevond)})
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_ios_jevond) > 0
-                   /\ chan_ios_jevond' = Tail(chan_ios_jevond)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ adversary_knowledge /= {}
-                   /\ \E msg \in adversary_knowledge:
-                        chan_ios_jevond' = Append(chan_ios_jevond, msg)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_jevond_cli) > 0
-                   /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_jevond_cli)})
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_jevond_cli) > 0
-                   /\ chan_jevond_cli' = Tail(chan_jevond_cli)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ adversary_knowledge /= {}
-                   /\ \E msg \in adversary_knowledge:
-                        chan_jevond_cli' = Append(chan_jevond_cli, msg)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_jevond_ios) > 0
-                   /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_jevond_ios)})
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_jevond_ios) > 0
-                   /\ chan_jevond_ios' = Tail(chan_jevond_ios)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ adversary_knowledge /= {}
-                   /\ \E msg \in adversary_knowledge:
-                        chan_jevond_ios' = Append(chan_jevond_ios, msg)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ current_token /= "none"
-                   /\ adversary_knowledge' = (adversary_knowledge \union {[type |-> "qr_token", token |-> current_token]})
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_pair_hello
-                   /\ adv_saved_client_pub' = Head(chan_ios_jevond).pubkey
-                   /\ chan_ios_jevond' = <<[type |-> MSG_pair_hello, token |-> Head(chan_ios_jevond).token, pubkey |-> adv_ecdh_pub]>> \o Tail(chan_ios_jevond)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_server_pub>>
-                \/ /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_hello_ack
-                   /\ adv_saved_server_pub' = Head(chan_jevond_ios).pubkey
-                   /\ adversary_keys' = (adversary_keys \union {DeriveKey(adv_ecdh_pub, adv_saved_server_pub'), DeriveKey(adv_ecdh_pub, adv_saved_client_pub)})
-                   /\ chan_jevond_ios' = <<[type |-> MSG_pair_hello_ack, pubkey |-> adv_ecdh_pub]>> \o Tail(chan_jevond_ios)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_knowledge, adv_saved_client_pub>>
-                \/ /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_complete /\ Head(chan_jevond_ios).key \in adversary_keys
-                   /\ LET msg == Head(chan_jevond_ios) IN
-                        /\ adversary_knowledge' = (adversary_knowledge \union {[type |-> "plaintext_secret", secret |-> msg.secret]})
-                        /\ chan_jevond_ios' = <<[type |-> MSG_pair_complete, key |-> DeriveKey(adv_ecdh_pub, adv_saved_client_pub), secret |-> msg.secret]>> \o Tail(chan_jevond_ios)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ \E m \in adversary_knowledge : m = [type |-> "qr_token", token |-> current_token]
-                   /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub])
-                   /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> "fake_token", pubkey |-> adv_ecdh_pub])
-                   /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ chan_cli_jevond' = Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<"guess", "000000">>])
-                   /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-                \/ /\ \E m \in adversary_knowledge : m.type = MSG_auth_request
-                   /\ \E msg \in {m \in adversary_knowledge : m.type = MSG_auth_request}:
-                        chan_ios_jevond' = Append(chan_ios_jevond, msg)
-                   /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
-             /\ UNCHANGED << jevond_state, ios_state, cli_state, current_token, 
-                             active_tokens, used_tokens, server_ecdh_pub, 
-                             received_client_pub, received_server_pub, 
-                             server_shared_key, client_shared_key, server_code, 
-                             ios_code, received_code, code_attempts, 
-                             device_secret, paired_devices, received_device_id, 
-                             auth_nonces_used, received_auth_nonce, 
-                             adv_ecdh_pub, recv_msg >>
+ios == ios_loop
+
+cli_loop == /\ pc[3] = "cli_loop"
+            /\ \/ /\ cli_state = cli_Idle
+                  /\ cli_state' = cli_GetKey
+                  /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, recv_msg>>
+               \/ /\ cli_state = cli_GetKey
+                  /\ chan_cli_jevond' = Append(chan_cli_jevond, [type |-> MSG_pair_begin])
+                  /\ cli_state' = cli_BeginPair
+                  /\ UNCHANGED <<chan_jevond_cli, recv_msg>>
+               \/ /\ cli_state = cli_BeginPair /\ Len(chan_jevond_cli) > 0 /\ Head(chan_jevond_cli).type = MSG_token_response
+                  /\ recv_msg' = Head(chan_jevond_cli)
+                  /\ chan_jevond_cli' = Tail(chan_jevond_cli)
+                  /\ cli_state' = cli_ShowQR
+                  /\ UNCHANGED chan_cli_jevond
+               \/ /\ cli_state = cli_ShowQR /\ Len(chan_jevond_cli) > 0 /\ Head(chan_jevond_cli).type = MSG_waiting_for_code
+                  /\ recv_msg' = Head(chan_jevond_cli)
+                  /\ chan_jevond_cli' = Tail(chan_jevond_cli)
+                  /\ cli_state' = cli_PromptCode
+                  /\ UNCHANGED chan_cli_jevond
+               \/ /\ cli_state = cli_PromptCode
+                  /\ chan_cli_jevond' = Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> ios_code])
+                  /\ cli_state' = cli_SubmitCode
+                  /\ UNCHANGED <<chan_jevond_cli, recv_msg>>
+               \/ /\ cli_state = cli_SubmitCode /\ Len(chan_jevond_cli) > 0 /\ Head(chan_jevond_cli).type = MSG_pair_status
+                  /\ recv_msg' = Head(chan_jevond_cli)
+                  /\ chan_jevond_cli' = Tail(chan_jevond_cli)
+                  /\ cli_state' = cli_Done
+                  /\ UNCHANGED chan_cli_jevond
+            /\ pc' = [pc EXCEPT ![3] = "Done"]
+            /\ UNCHANGED << jevond_state, ios_state, chan_ios_jevond, 
+                            chan_jevond_ios, adversary_knowledge, 
+                            current_token, active_tokens, used_tokens, 
+                            server_ecdh_pub, received_client_pub, 
+                            received_server_pub, server_shared_key, 
+                            client_shared_key, server_code, ios_code, 
+                            received_code, code_attempts, device_secret, 
+                            paired_devices, received_device_id, 
+                            auth_nonces_used, received_auth_nonce, 
+                            adversary_keys, adv_ecdh_pub, adv_saved_client_pub, 
+                            adv_saved_server_pub >>
+
+cli == cli_loop
+
+adv_loop == /\ pc[4] = "adv_loop"
+            /\ \/ /\ TRUE
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_cli_jevond) > 0
+                  /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_cli_jevond)})
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_cli_jevond) > 0
+                  /\ chan_cli_jevond' = Tail(chan_cli_jevond)
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ adversary_knowledge /= {} /\ Len(chan_cli_jevond) < 3
+                  /\ \E msg \in adversary_knowledge:
+                       chan_cli_jevond' = Append(chan_cli_jevond, msg)
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_ios_jevond) > 0
+                  /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_ios_jevond)})
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_ios_jevond) > 0
+                  /\ chan_ios_jevond' = Tail(chan_ios_jevond)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ adversary_knowledge /= {} /\ Len(chan_ios_jevond) < 3
+                  /\ \E msg \in adversary_knowledge:
+                       chan_ios_jevond' = Append(chan_ios_jevond, msg)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_jevond_cli) > 0
+                  /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_jevond_cli)})
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_jevond_cli) > 0
+                  /\ chan_jevond_cli' = Tail(chan_jevond_cli)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ adversary_knowledge /= {} /\ Len(chan_jevond_cli) < 3
+                  /\ \E msg \in adversary_knowledge:
+                       chan_jevond_cli' = Append(chan_jevond_cli, msg)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_jevond_ios) > 0
+                  /\ adversary_knowledge' = (adversary_knowledge \union {Head(chan_jevond_ios)})
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_jevond_ios) > 0
+                  /\ chan_jevond_ios' = Tail(chan_jevond_ios)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ adversary_knowledge /= {} /\ Len(chan_jevond_ios) < 3
+                  /\ \E msg \in adversary_knowledge:
+                       chan_jevond_ios' = Append(chan_jevond_ios, msg)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ current_token /= "none"
+                  /\ adversary_knowledge' = (adversary_knowledge \union {[type |-> "qr_token", token |-> current_token]})
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_ios_jevond) > 0 /\ Head(chan_ios_jevond).type = MSG_pair_hello
+                  /\ adv_saved_client_pub' = Head(chan_ios_jevond).pubkey
+                  /\ chan_ios_jevond' = <<[type |-> MSG_pair_hello, token |-> Head(chan_ios_jevond).token, pubkey |-> adv_ecdh_pub]>> \o Tail(chan_ios_jevond)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_server_pub>>
+               \/ /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_hello_ack
+                  /\ adv_saved_server_pub' = Head(chan_jevond_ios).pubkey
+                  /\ adversary_keys' = (adversary_keys \union {DeriveKey(adv_ecdh_pub, adv_saved_server_pub'), DeriveKey(adv_ecdh_pub, adv_saved_client_pub)})
+                  /\ chan_jevond_ios' = <<[type |-> MSG_pair_hello_ack, pubkey |-> adv_ecdh_pub]>> \o Tail(chan_jevond_ios)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_knowledge, adv_saved_client_pub>>
+               \/ /\ Len(chan_jevond_ios) > 0 /\ Head(chan_jevond_ios).type = MSG_pair_complete /\ Head(chan_jevond_ios).key \in adversary_keys
+                  /\ LET msg == Head(chan_jevond_ios) IN
+                       /\ adversary_knowledge' = (adversary_knowledge \union {[type |-> "plaintext_secret", secret |-> msg.secret]})
+                       /\ chan_jevond_ios' = <<[type |-> MSG_pair_complete, key |-> DeriveKey(adv_ecdh_pub, adv_saved_client_pub), secret |-> msg.secret]>> \o Tail(chan_jevond_ios)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_ios_jevond, chan_jevond_cli, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ \E m \in adversary_knowledge : m = [type |-> "qr_token", token |-> current_token]
+                  /\ Len(chan_ios_jevond) < 3
+                  /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub])
+                  /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_ios_jevond) < 3
+                  /\ chan_ios_jevond' = Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> "fake_token", pubkey |-> adv_ecdh_pub])
+                  /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_cli_jevond) < 3
+                  /\ chan_cli_jevond' = Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<"guess", "000000">>])
+                  /\ UNCHANGED <<chan_ios_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+               \/ /\ Len(chan_ios_jevond) < 3
+                  /\ \E m \in adversary_knowledge : m.type = MSG_auth_request
+                  /\ \E msg \in {m \in adversary_knowledge : m.type = MSG_auth_request}:
+                       chan_ios_jevond' = Append(chan_ios_jevond, msg)
+                  /\ UNCHANGED <<chan_cli_jevond, chan_jevond_cli, chan_jevond_ios, adversary_knowledge, adversary_keys, adv_saved_client_pub, adv_saved_server_pub>>
+            /\ pc' = [pc EXCEPT ![4] = "adv_loop"]
+            /\ UNCHANGED << jevond_state, ios_state, cli_state, current_token, 
+                            active_tokens, used_tokens, server_ecdh_pub, 
+                            received_client_pub, received_server_pub, 
+                            server_shared_key, client_shared_key, server_code, 
+                            ios_code, received_code, code_attempts, 
+                            device_secret, paired_devices, received_device_id, 
+                            auth_nonces_used, received_auth_nonce, 
+                            adv_ecdh_pub, recv_msg >>
+
+Adversary == adv_loop
 
 Next == jevond \/ ios \/ cli \/ Adversary
 

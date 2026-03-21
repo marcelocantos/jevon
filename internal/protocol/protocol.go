@@ -139,14 +139,16 @@ type Actor struct {
 // Protocol is the complete definition of a multi-actor protocol.
 // This is the single source of truth for runtime and TLA+ generation.
 type Protocol struct {
-	Name       string
-	Actors     []Actor
-	Messages   []Message
-	Vars       []VarDef    // auxiliary state variables
-	Guards     []GuardDef  // guard TLA+ expressions
-	Operators  []Operator  // TLA+ helper operators
-	AdvActions []AdvAction // adversary capabilities beyond Dolev-Yao
-	Properties []Property
+	Name         string
+	Actors       []Actor
+	Messages     []Message
+	Vars         []VarDef    // auxiliary state variables
+	Guards       []GuardDef  // guard TLA+ expressions
+	Operators    []Operator  // TLA+ helper operators
+	AdvActions   []AdvAction // adversary capabilities beyond Dolev-Yao
+	Properties   []Property
+	ChannelBound int // max messages per channel (0 = unbounded)
+	OneShot      bool // if true, actors run once then terminate (no loop)
 }
 
 // Validate checks the protocol definition for internal consistency:

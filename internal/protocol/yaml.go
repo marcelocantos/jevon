@@ -14,14 +14,16 @@ import (
 // YAML parse types — mirrors the YAML schema.
 
 type yamlProtocol struct {
-	Name       string                     `yaml:"name"`
-	Messages   yaml.Node                  `yaml:"messages"`
-	Actors     yaml.Node                  `yaml:"actors"`
-	Vars       yaml.Node                  `yaml:"vars"`
-	Guards     yaml.Node                  `yaml:"guards"`
-	Operators  yaml.Node                  `yaml:"operators"`
-	Adversary  []yamlAdvAction            `yaml:"adversary"`
-	Properties []yamlProperty             `yaml:"properties"`
+	Name         string                     `yaml:"name"`
+	Messages     yaml.Node                  `yaml:"messages"`
+	Actors       yaml.Node                  `yaml:"actors"`
+	Vars         yaml.Node                  `yaml:"vars"`
+	Guards       yaml.Node                  `yaml:"guards"`
+	Operators    yaml.Node                  `yaml:"operators"`
+	Adversary    []yamlAdvAction            `yaml:"adversary"`
+	Properties   []yamlProperty             `yaml:"properties"`
+	ChannelBound int                        `yaml:"channel_bound"`
+	OneShot      bool                       `yaml:"one_shot"`
 }
 
 type yamlMessage struct {
@@ -93,7 +95,11 @@ func ParseYAML(data []byte) (*Protocol, error) {
 		return nil, fmt.Errorf("parse YAML: %w", err)
 	}
 
-	p := &Protocol{Name: yp.Name}
+	p := &Protocol{
+		Name:         yp.Name,
+		ChannelBound: yp.ChannelBound,
+		OneShot:      yp.OneShot,
+	}
 
 	// Messages — preserve YAML key order.
 	msgs, err := parseOrderedMap[yamlMessage](&yp.Messages)

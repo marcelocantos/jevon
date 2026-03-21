@@ -2,6 +2,8 @@
 # Source of truth for: Go runtime, Swift runtime, TLA+ spec, PlantUML diagram.
 
 name: PairingCeremony
+one_shot: true     # pairing runs once, actors don't loop
+channel_bound: 3   # max messages per channel (1 real + adversary slack)
 
 messages:
   pair_begin:
@@ -375,18 +377,22 @@ adversary:
     desc: race a forged pair_hello using shoulder-surfed token
     code: |
       await \E m \in adversary_knowledge : m = [type |-> "qr_token", token |-> current_token];
+      await Len(chan_ios_jevond) < 3;
       chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);
   - name: token_bruteforce
     desc: send pair_hello with fabricated token
     code: |
+      await Len(chan_ios_jevond) < 3;
       chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> "fake_token", pubkey |-> adv_ecdh_pub]);
   - name: code_guess
     desc: submit fabricated confirmation code via CLI channel
     code: |
+      await Len(chan_cli_jevond) < 3;
       chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<"guess", "000000">>]);
   - name: session_replay
     desc: replay captured auth_request with stale nonce
     code: |
+      await Len(chan_ios_jevond) < 3;
       await \E m \in adversary_knowledge : m.type = MSG_auth_request;
       with msg \in {m \in adversary_knowledge : m.type = MSG_auth_request} do
         chan_ios_jevond := Append(chan_ios_jevond, msg);

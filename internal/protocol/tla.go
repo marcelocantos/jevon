@@ -143,7 +143,9 @@ func writeProcesses(b *strings.Builder, p *Protocol) {
 		fmt.Fprintf(b, "fair process %s = %d\n", sanitiseTLA(a.Name), i+1)
 		b.WriteString("begin\n")
 		fmt.Fprintf(b, "  %s_loop:\n", sanitiseTLA(a.Name))
-		b.WriteString("  while TRUE do\n")
+		if !p.OneShot {
+			b.WriteString("  while TRUE do\n")
+		}
 
 		b.WriteString("    either\n")
 
@@ -160,7 +162,9 @@ func writeProcesses(b *strings.Builder, p *Protocol) {
 		}
 
 		b.WriteString("    end either;\n")
-		b.WriteString("  end while;\n")
+		if !p.OneShot {
+			b.WriteString("  end while;\n")
+		}
 		b.WriteString("end process;\n\n")
 	}
 }
@@ -291,7 +295,11 @@ func writeAdversary(b *strings.Builder, p *Protocol) {
 
 		b.WriteString("    or\n")
 		fmt.Fprintf(b, "      \\* Replay into %s -> %s\n", ch.from, ch.to)
-		b.WriteString("      await adversary_knowledge /= {};\n")
+		if p.ChannelBound > 0 {
+			fmt.Fprintf(b, "      await adversary_knowledge /= {} /\\ Len(%s) < %d;\n", chanName, p.ChannelBound)
+		} else {
+			b.WriteString("      await adversary_knowledge /= {};\n")
+		}
 		fmt.Fprintf(b, "      with msg \\in adversary_knowledge do\n")
 		fmt.Fprintf(b, "        %s := Append(%s, msg);\n", chanName, chanName)
 		b.WriteString("      end with;\n")

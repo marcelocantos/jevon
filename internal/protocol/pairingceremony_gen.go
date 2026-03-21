@@ -73,13 +73,13 @@ const (
 
 // Actions.
 const (
+	ActionGenerateToken ActionID = "generate_token"
+	ActionRegisterRelay ActionID = "register_relay"
 	ActionDeriveSecret ActionID = "derive_secret"
 	ActionStoreDevice ActionID = "store_device"
 	ActionVerifyDevice ActionID = "verify_device"
 	ActionSendPairHello ActionID = "send_pair_hello"
 	ActionStoreSecret ActionID = "store_secret"
-	ActionGenerateToken ActionID = "generate_token"
-	ActionRegisterRelay ActionID = "register_relay"
 )
 
 func PairingCeremony() *Protocol {
@@ -113,7 +113,7 @@ func PairingCeremony() *Protocol {
 				{From: "ShowCode", To: "WaitPairComplete", On: Internal("code displayed")},
 				{From: "WaitPairComplete", To: "Paired", On: Recv("pair_complete"), Do: "store_secret"},
 				{From: "Paired", To: "Reconnect", On: Internal("app launch")},
-				{From: "Reconnect", To: "SendAuth", On: Internal("relay connected"), Sends: []Send{{To: "jevond", Msg: "auth_request", Fields: map[string]string{"secret": "device_secret", "nonce": "\"nonce_1\"", "key": "client_shared_key", "device_id": "\"device_1\"", }}, }},
+				{From: "Reconnect", To: "SendAuth", On: Internal("relay connected"), Sends: []Send{{To: "jevond", Msg: "auth_request", Fields: map[string]string{"device_id": "\"device_1\"", "secret": "device_secret", "nonce": "\"nonce_1\"", "key": "client_shared_key", }}, }},
 				{From: "SendAuth", To: "SessionActive", On: Recv("auth_ok")},
 				{From: "SessionActive", To: "Paired", On: Internal("disconnect")},
 			}},
@@ -182,10 +182,10 @@ func PairingCeremony() *Protocol {
 			{Name: "MitM_pair_hello", Desc: "intercept pair_hello and substitute adversary ECDH pubkey", Code: "      await Len(chan_ios_jevond) > 0 /\\ Head(chan_ios_jevond).type = MSG_pair_hello;\n      adv_saved_client_pub := Head(chan_ios_jevond).pubkey;\n      chan_ios_jevond := <<[type |-> MSG_pair_hello, token |-> Head(chan_ios_jevond).token, pubkey |-> adv_ecdh_pub]>> \\o Tail(chan_ios_jevond);"},
 			{Name: "MitM_pair_hello_ack", Desc: "intercept pair_hello_ack and substitute adversary ECDH pubkey, derive both shared secrets", Code: "      await Len(chan_jevond_ios) > 0 /\\ Head(chan_jevond_ios).type = MSG_pair_hello_ack;\n      adv_saved_server_pub := Head(chan_jevond_ios).pubkey;\n      adversary_keys := adversary_keys \\union {DeriveKey(adv_ecdh_pub, adv_saved_server_pub), DeriveKey(adv_ecdh_pub, adv_saved_client_pub)};\n      chan_jevond_ios := <<[type |-> MSG_pair_hello_ack, pubkey |-> adv_ecdh_pub]>> \\o Tail(chan_jevond_ios);"},
 			{Name: "MitM_reencrypt_secret", Desc: "decrypt pair_complete with MitM key, learn device secret", Code: "      await Len(chan_jevond_ios) > 0 /\\ Head(chan_jevond_ios).type = MSG_pair_complete /\\ Head(chan_jevond_ios).key \\in adversary_keys;\n      with msg = Head(chan_jevond_ios) do\n        adversary_knowledge := adversary_knowledge \\union {[type |-> \"plaintext_secret\", secret |-> msg.secret]};\n        chan_jevond_ios := <<[type |-> MSG_pair_complete, key |-> DeriveKey(adv_ecdh_pub, adv_saved_client_pub), secret |-> msg.secret]>> \\o Tail(chan_jevond_ios);\n      end with;"},
-			{Name: "concurrent_pair", Desc: "race a forged pair_hello using shoulder-surfed token", Code: "      await \\E m \\in adversary_knowledge : m = [type |-> \"qr_token\", token |-> current_token];\n      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);"},
-			{Name: "token_bruteforce", Desc: "send pair_hello with fabricated token", Code: "      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> \"fake_token\", pubkey |-> adv_ecdh_pub]);"},
-			{Name: "code_guess", Desc: "submit fabricated confirmation code via CLI channel", Code: "      chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<\"guess\", \"000000\">>]);"},
-			{Name: "session_replay", Desc: "replay captured auth_request with stale nonce", Code: "      await \\E m \\in adversary_knowledge : m.type = MSG_auth_request;\n      with msg \\in {m \\in adversary_knowledge : m.type = MSG_auth_request} do\n        chan_ios_jevond := Append(chan_ios_jevond, msg);\n      end with;"},
+			{Name: "concurrent_pair", Desc: "race a forged pair_hello using shoulder-surfed token", Code: "      await \\E m \\in adversary_knowledge : m = [type |-> \"qr_token\", token |-> current_token];\n      await Len(chan_ios_jevond) < 3;\n      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> current_token, pubkey |-> adv_ecdh_pub]);"},
+			{Name: "token_bruteforce", Desc: "send pair_hello with fabricated token", Code: "      await Len(chan_ios_jevond) < 3;\n      chan_ios_jevond := Append(chan_ios_jevond, [type |-> MSG_pair_hello, token |-> \"fake_token\", pubkey |-> adv_ecdh_pub]);"},
+			{Name: "code_guess", Desc: "submit fabricated confirmation code via CLI channel", Code: "      await Len(chan_cli_jevond) < 3;\n      chan_cli_jevond := Append(chan_cli_jevond, [type |-> MSG_code_submit, code |-> <<\"guess\", \"000000\">>]);"},
+			{Name: "session_replay", Desc: "replay captured auth_request with stale nonce", Code: "      await Len(chan_ios_jevond) < 3;\n      await \\E m \\in adversary_knowledge : m.type = MSG_auth_request;\n      with msg \\in {m \\in adversary_knowledge : m.type = MSG_auth_request} do\n        chan_ios_jevond := Append(chan_ios_jevond, msg);\n      end with;"},
 		},
 		Properties: []Property{
 			{Name: "NoTokenReuse", Kind: 0, Expr: "used_tokens \\intersect active_tokens = {}", Desc: "A revoked pairing token is never accepted again"},
