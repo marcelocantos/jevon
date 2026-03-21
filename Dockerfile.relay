@@ -1,0 +1,12 @@
+FROM golang:1.25-alpine AS build
+WORKDIR /src
+COPY go.mod go.sum ./
+RUN go mod download
+COPY cmd/relay/ cmd/relay/
+COPY internal/ internal/
+RUN CGO_ENABLED=0 go build -o /relay ./cmd/relay/
+
+FROM alpine:3.21
+COPY --from=build /relay /relay
+EXPOSE 8080
+CMD ["/relay"]
