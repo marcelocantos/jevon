@@ -42,5 +42,9 @@
 	</dict>
 	<key>NSCameraUsageDescription</key>
 	<string>Jevon uses the camera to scan QR codes for connecting to the server.</string>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Jevon uses the microphone for voice input to the AI assistant.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Jevon uses speech recognition for voice commands.</string>
 </dict>
 </plist>

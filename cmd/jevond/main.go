@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"os"
+	"os/exec"
 	"os/signal"
 	"path/filepath"
 	"strings"
@@ -120,9 +121,19 @@ func main() {
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
 	debug := flag.Bool("debug", false, "enable debug logging")
+	setOpenAIKey := flag.String("set-openai-key", "", "store OpenAI API key in macOS Keychain and exit")
 	showVersion := flag.Bool("version", false, "print version and exit")
 	helpAgent := flag.Bool("help-agent", false, "print agent guide and exit")
 	flag.Parse()
+
+	if *setOpenAIKey != "" {
+		if err := storeKeychainKey("openai-api-key", *setOpenAIKey); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to store key: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("OpenAI API key stored in macOS Keychain.")
+		os.Exit(0)
+	}
 
 	if *showVersion {
 		fmt.Println("jevond", cli.Version)
@@ -273,6 +284,15 @@ func main() {
 	if syncMgr != nil {
 		srv.SetSyncManager(syncMgr)
 		slog.Info("sqlpipe sync enabled")
+	}
+
+	// Load OpenAI API key from Keychain (fall back to env var).
+	if key, err := loadKeychainKey("openai-api-key"); err == nil && key != "" {
+		srv.SetOpenAIKey(key)
+		slog.Info("OpenAI API key loaded from Keychain")
+	} else if key := os.Getenv("OPENAI_API_KEY"); key != "" {
+		srv.SetOpenAIKey(key)
+		slog.Info("OpenAI API key loaded from environment")
 	}
 
 	// Transcript reader for Lua access to Claude session transcripts.
@@ -572,4 +592,23 @@ func main() {
 		slog.Error("server failed", "err", err)
 		os.Exit(1)
 	}
+}
+
+// storeKeychainKey stores a value in the macOS Keychain under the "jevon" account.
+func storeKeychainKey(service, value string) error {
+	// Delete any existing entry first (add fails if it exists).
+	exec.Command("security", "delete-generic-password",
+		"-a", "jevon", "-s", service).Run()
+	return exec.Command("security", "add-generic-password",
+		"-a", "jevon", "-s", service, "-w", value).Run()
+}
+
+// loadKeychainKey retrieves a value from the macOS Keychain.
+func loadKeychainKey(service string) (string, error) {
+	out, err := exec.Command("security", "find-generic-password",
+		"-a", "jevon", "-s", service, "-w").Output()
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(string(out)), nil
 }

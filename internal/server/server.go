@@ -9,7 +9,9 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
+	"strings"
 	"os"
 	"path/filepath"
 	"net/http"
@@ -54,6 +56,8 @@ type Server struct {
 
 	lastScreenshot string
 	screenshotCh   chan string
+
+	openAIKey string // set via SetOpenAIKey
 }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
@@ -216,7 +220,44 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/kill", s.handleKillSession)
+	mux.HandleFunc("POST /api/realtime/token", s.handleRealtimeToken)
 }
+
+// handleRealtimeToken proxies an ephemeral token request to the OpenAI
+// Realtime API. The API key stays on the server; the client gets a
+// short-lived token for direct WebSocket connection to OpenAI.
+func (s *Server) handleRealtimeToken(w http.ResponseWriter, r *http.Request) {
+	apiKey := s.openAIKey
+	if apiKey == "" {
+		http.Error(w, `{"error":"OPENAI_API_KEY not configured (set env var or store in macOS Keychain: security add-generic-password -a jevon -s openai-api-key -w YOUR_KEY)"}`, http.StatusServiceUnavailable)
+		return
+	}
+
+	body := `{"model":"gpt-4o-transcribe","voice":"alloy"}`
+	req, err := http.NewRequestWithContext(r.Context(), "POST",
+		"https://api.openai.com/v1/realtime/sessions", strings.NewReader(body))
+	if err != nil {
+		http.Error(w, `{"error":"request creation failed"}`, http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Content-Type", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		slog.Error("openai realtime session failed", "err", err)
+		http.Error(w, `{"error":"openai request failed"}`, http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(resp.StatusCode)
+	io.Copy(w, resp.Body)
+}
+
+// SetOpenAIKey sets the OpenAI API key for Realtime API token proxying.
+func (s *Server) SetOpenAIKey(key string) { s.openAIKey = key }
 
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")

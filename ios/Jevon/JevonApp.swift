@@ -6,16 +6,26 @@ import SwiftUI
 @main
 struct JevonApp: App {
     @State private var connection = Connection()
+    @State private var voiceManager = VoiceManager()
     @State private var showSafeMode = false
 
     var body: some Scene {
         WindowGroup {
             ContentView()
                 .environment(connection)
+                .environment(voiceManager)
                 .task {
                     #if targetEnvironment(simulator)
                     connection.connect(to: "localhost", port: 13705)
                     #endif
+                }
+                .onChange(of: connection.httpBaseURL) { _, url in
+                    voiceManager.serverBaseURL = url
+                }
+                .task {
+                    voiceManager.onUtterance = { text in
+                        connection.send(text)
+                    }
                 }
                 .onAppear {
                     installChevronGesture()

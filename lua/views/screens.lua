@@ -149,7 +149,7 @@ function chat_screen(state)
     -- Toolbar
     local tb = toolbar(
         {icon_button("sessions-btn", "list.bullet", "show_sessions")},
-        {}
+        {icon_button("mic-btn", "mic.fill", "toggle_voice")}
     )
 
     return nav("Jevon", tb, body)

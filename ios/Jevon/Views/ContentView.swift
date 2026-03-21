@@ -5,6 +5,7 @@ import SwiftUI
 
 struct ContentView: View {
     @Environment(Connection.self) private var connection
+    @Environment(VoiceManager.self) private var voiceManager
     @State private var showSheet = false
     @State private var showNotification = false
 
@@ -13,7 +14,7 @@ struct ContentView: View {
             if let mainView = connection.mainView {
                 // Server-driven UI — render the view tree from jevond.
                 ServerView(node: mainView) { action, value in
-                    connection.sendAction(action, value: value)
+                    handleAction(action, value: value)
                 }
             } else {
                 // Fallback to purpose-built views.
@@ -44,6 +45,14 @@ struct ContentView: View {
             actions: { Button("OK") { connection.dismissNotification() } },
             message: { Text(connection.notificationBody ?? "") }
         )
+    }
+
+    private func handleAction(_ action: String, value: String) {
+        if action == "toggle_voice" {
+            voiceManager.toggle()
+            return
+        }
+        connection.sendAction(action, value: value)
     }
 
     @ViewBuilder

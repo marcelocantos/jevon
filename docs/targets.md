@@ -372,6 +372,84 @@ without depending on the Lua layer.
 - Smoke test: push a broken script, verify safe mode activates and
   rollback restores the working UI.
 
+### 🎯T14 Onboarding and device pairing
+
+- **Value**: 8
+- **Cost**: 8
+- **Weight**: 1.0 (value 8 / cost 8)
+- **Status**: identified
+- **Discovered**: 2026-03-21
+
+**Desired state:** A new user goes from zero to connected in one flow
+with no manual IP entry or configuration.
+
+**Onboarding flow:**
+1. User installs the iOS app. App opens a QR scanner and displays:
+   "Run `brew install marcelocantos/tap/jevon && jevon --init` on
+   your laptop."
+2. `jevon --init` (a separate CLI binary, not jevond) prompts the
+   user to paste their OpenAI API key. Stores it in macOS Keychain.
+3. CLI pings jevond (running as a brew service) that the key is
+   available.
+4. jevond generates a one-time auth token, encodes it with host:port
+   into a QR code, and sends it back to the CLI for display.
+5. User points their device at the QR code on the terminal.
+6. App scans QR, extracts host:port + auth token, connects to jevond
+   with the token. jevond validates and promotes the connection.
+
+**Key details:**
+- jevond runs as a launchd service via `brew services start jevon`.
+  Starts with or without the OpenAI key.
+- QR code contains `jevon://<host>:<port>?token=<one-time-token>`.
+  The token authenticates the device pairing, not the OpenAI key.
+- Manual IP:port entry removed from the connect screen. QR-only.
+- `jevon` CLI binary is separate from `jevond` daemon.
+
+**Acceptance criteria:**
+- `brew install` installs both `jevon` CLI and `jevond` daemon.
+- `jevon --init` prompts for OpenAI key, stores in Keychain, triggers
+  QR display via jevond.
+- iOS app scans QR and connects with one-time token.
+- No manual host/port entry in the app.
+- jevond runs as a brew service.
+
+### 🎯T13 Full-duplex voice input
+
+- **Value**: 13
+- **Cost**: 8
+- **Weight**: 1.6 (value 13 / cost 8)
+- **Status**: identified
+- **Discovered**: 2026-03-21
+
+**Desired state:** The user speaks continuously into the iOS app. Each
+utterance is transcribed in real-time via OpenAI's Realtime API
+(`gpt-4o-transcribe`) and delivered to jevond as a user message
+immediately. The agent can begin responding while the user is still
+speaking. New utterances interrupt the current response — the agent
+considers the full accumulated input before continuing.
+
+**Architecture:**
+- **Local VAD:** `AVAudioEngine` monitors mic levels on-device (always
+  on, no network cost). On speech detection, opens OpenAI WebSocket.
+- **Cloud transcription:** OpenAI Realtime API with `gpt-4o-transcribe`
+  model. 24kHz mono PCM16 audio streamed via WebSocket. Semantic VAD
+  detects utterance boundaries.
+- **Ephemeral tokens:** jevond proxies OpenAI API key. iOS app requests
+  a short-lived token per voice session. No secrets on-device.
+- **Sentence delivery:** On `transcription.completed`, send transcript
+  to jevond as a regular user message.
+- **Interruption:** When a new utterance arrives while the agent is
+  responding, jevond cancels the current Claude process and restarts
+  with the full accumulated context.
+
+**Acceptance criteria:**
+- Local VAD detects speech onset and opens OpenAI Realtime connection.
+- Audio streams to OpenAI, transcription deltas displayed in real-time.
+- Completed utterances sent to jevond immediately as user messages.
+- Agent response interrupted and restarted when new input arrives.
+- Extended silence closes the OpenAI connection (back to local VAD).
+- No API keys stored on device — ephemeral token flow via jevond.
+
 ## Achieved
 
 ### 🎯T4 Trust model defined for pre-1.0
