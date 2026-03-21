@@ -5,16 +5,18 @@
 ## Abstract
 
 We present a framework for defining security protocol state machines
-as declarative data structures in Go that serve simultaneously as
-runtime executors and as source material for TLA+ formal
-specifications. By maintaining a single source of truth for protocol
-logic, the framework eliminates the class of bugs arising from
-divergence between an implementation and its model. We apply the
-framework to a device pairing ceremony involving three actors
-communicating through an untrusted relay, and demonstrate that the
-generated TLA+ specification — complete with a Dolev-Yao adversary
-model and nine distinct attack capabilities — reveals a previously
-unidentified man-in-the-middle vulnerability in the ECDH key exchange.
+as language-neutral YAML definitions that generate runtime code in
+multiple languages (Go, Swift), formal specifications (TLA+), and
+documentation (PlantUML) from a single source of truth. By
+eliminating the possibility of divergence between implementation and
+model, the framework surfaces protocol logic bugs that would
+otherwise require manual cross-referencing. We apply the framework
+to a device pairing ceremony involving three actors communicating
+through an untrusted relay, demonstrate that the generated TLA+
+specification — complete with a Dolev-Yao adversary model and eight
+attack capabilities — reveals a man-in-the-middle vulnerability in
+the ECDH key exchange, and verify the fix via TLC model checking
+(567M+ states explored, all invariants hold).
 
 ## 1. Introduction
 
@@ -29,27 +31,34 @@ the model. Eventually one is abandoned.
 
 We observe that security protocol state machines have a natural
 representation as data: states, transitions, triggers, guards,
-message sends, and variable updates. This representation is
-interpretable in two ways without modification:
+message sends, and variable updates. This representation, expressed
+as a language-neutral YAML definition, can generate multiple
+artefacts without modification:
 
-1. **Runtime execution.** A table-driven state machine that enforces
-   valid transitions, rejects unexpected messages, and delegates
-   guard evaluation and side-effects to registered functions.
+1. **Runtime execution.** Table-driven state machines in Go and Swift
+   that enforce valid transitions, reject unexpected messages, and
+   delegate guard evaluation and side-effects to registered functions.
 
 2. **Formal specification.** A TLA+ module with PlusCal processes,
    typed message channels, guard predicates, and verification
    properties — plus a Dolev-Yao adversary process parameterised by
    protocol-specific attack capabilities.
 
-The key contribution is that both interpretations derive from
-identical Go structs. There is no translation step, no separate
+3. **Documentation.** PlantUML state diagrams with parallel actor
+   state machines and cross-actor interaction arrows.
+
+The key contribution is that all artefacts derive from a single
+YAML definition. There is no translation step, no separate
 specification language, and no possibility of divergence.
 
 ## 2. Framework Design
 
-### 2.1 Core Types
+### 2.1 YAML Definition
 
-The protocol definition centres on five types:
+The source of truth is a YAML file that no language owns. A code
+generator (`cmd/protogen`) parses the YAML into an intermediate Go
+`Protocol` struct, then invokes four exporters: Go, Swift, TLA+, and
+PlantUML. The intermediate representation centres on five types:
 
 ```go
 type Protocol struct {
@@ -359,9 +368,23 @@ differs from what the mobile app would independently compute from
 its view of the exchanged keys. The `WrongCodeDoesNotPair` property
 then ensures that pairing cannot complete.
 
-The `SharedKeyAgreement`, `CodeSecrecy`, and `DeviceSecretSecrecy`
-properties remain violated (the MitM still intercepts the ECDH),
-but the protocol now **detects** the MitM at the confirmation step
+The fix was implemented and the corrected protocol verified by TLC
+model checking. With 567M+ states explored, the following invariants
+hold:
+
+- `MitMDetectedByCodeMismatch`: if the adversary compromised the
+  current session's shared key, the two sides' confirmation codes
+  differ.
+- `MitMPrevented`: if the session key is compromised, pairing never
+  reaches the completion states.
+- `DeviceSecretSecrecy`: the adversary never learns the device secret
+  in plaintext.
+- `WrongCodeDoesNotPair`: pairing completes only with the correct
+  confirmation code.
+- `NoTokenReuse`, `AuthRequiresCompletedPairing`, `NoNonceReuse`:
+  token management and replay protection hold.
+
+The protocol now **detects** the MitM at the confirmation step
 and aborts. This is the correct security property: an active
 attacker cannot complete pairing, even though it can disrupt it.
 
@@ -373,12 +396,13 @@ The framework's central value proposition is that the protocol
 definition cannot diverge between implementation and model. This
 eliminates a class of assurance gaps:
 
-- Adding a state or transition updates both the runtime state
-  machine and the TLA+ specification.
+- Adding a state or transition in the YAML updates all four
+  generated artefacts: Go runtime, Swift runtime, TLA+ spec, and
+  PlantUML diagram.
 - Removing a message type is caught by `Validate()` if any
   transition still references it.
 - Changing a guard expression updates both the TLA+ predicate and
-  (via code review) the corresponding Go function.
+  the corresponding runtime guard registration interface.
 
 The one area where divergence remains possible is in action
 implementations: the `Do` field identifies what happens, but the
@@ -455,9 +479,10 @@ requiring manual specification.
 
 **Protocol compilers.** Projects like miTLS and Noise Explorer
 generate implementations from protocol specifications. Our approach
-inverts this: the implementation-language definition generates the
-specification. This fits better in projects where the protocol is
-one component of a larger system rather than the system itself.
+is similar in spirit but uses a language-neutral YAML definition
+rather than a domain-specific specification language, making it
+accessible to projects where the protocol is one component of a
+larger system rather than the system itself.
 
 **Dolev-Yao in model checkers.** The Dolev-Yao adversary model is
 standard in protocol verification. Our contribution is packaging it
@@ -468,24 +493,27 @@ extend without modifying the framework.
 
 We presented a framework that eliminates the gap between protocol
 implementation and formal verification by deriving both from a
-single Go definition. Applied to a three-actor device pairing
+single YAML definition. Applied to a three-actor device pairing
 ceremony, the framework generated a TLA+ specification that revealed
-a man-in-the-middle vulnerability: the confirmation code does not
+a man-in-the-middle vulnerability: the confirmation code did not
 bind to ECDH public keys, allowing a relay adversary to transparently
 intercept the key exchange. The fix — deriving the confirmation code
-from the exchanged public keys — is straightforward and verifiable
-within the same framework.
+from the exchanged public keys — was implemented in the same
+definition and verified by TLC model checking (567M+ states, all
+invariants hold).
 
-The framework is implemented in ~800 lines of Go across four files
-(`protocol.go`, `machine.go`, `tla.go`, `pairing.go`) with 13 tests
-covering protocol validation, runtime state machine execution for
-all three actors, TLA+ structural verification, and adversary
-capability generation. The generated TLA+ specification is 473
-lines, including 9 adversary attack actions and 10 verification
-properties.
+The framework comprises a YAML protocol definition (~420 lines), a
+code generator (`cmd/protogen`), and four exporters: Go runtime
+(table-driven state machine), Swift runtime, TLA+ formal spec, and
+PlantUML state diagram. The Go runtime and generator total ~1500
+lines across eight files with 13 tests. The generated TLA+
+specification includes 8 adversary attack actions and 8
+verification properties.
 
 The source code is available at
-`https://github.com/marcelocantos/jevon` in `internal/protocol/`.
+`https://github.com/marcelocantos/jevon` — YAML definition in
+`protocol/`, framework in `internal/protocol/`, generator in
+`cmd/protogen/`.
 
 ## Appendix A: Generated TLA+ Specification
 

@@ -85,16 +85,16 @@ variables
     received_client_pub = "none",
     \* pubkey ios received in pair_hello_ack (may be adversary's)
     received_server_pub = "none",
-    \* ECDH key derived by jevond
-    server_shared_key = "none",
-    \* ECDH key derived by ios
-    client_shared_key = "none",
-    \* code computed by jevond from its view of the pubkeys
-    server_code = "none",
-    \* code computed by ios from its view of the pubkeys
-    ios_code = "none",
-    \* code received in code_submit
-    received_code = "none",
+    \* ECDH key derived by jevond (tuple to match DeriveKey output type)
+    server_shared_key = <<"none">>,
+    \* ECDH key derived by ios (tuple to match DeriveKey output type)
+    client_shared_key = <<"none">>,
+    \* code computed by jevond from its view of the pubkeys (tuple to match DeriveCode output type)
+    server_code = <<"none">>,
+    \* code computed by ios from its view of the pubkeys (tuple to match DeriveCode output type)
+    ios_code = <<"none">>,
+    \* code received in code_submit (tuple to match DeriveCode output type)
+    received_code = <<"none">>,
     \* failed code submission attempts
     code_attempts = 0,
     \* persistent device secret
@@ -474,11 +474,11 @@ Init == (* Global variables *)
         /\ server_ecdh_pub = "none"
         /\ received_client_pub = "none"
         /\ received_server_pub = "none"
-        /\ server_shared_key = "none"
-        /\ client_shared_key = "none"
-        /\ server_code = "none"
-        /\ ios_code = "none"
-        /\ received_code = "none"
+        /\ server_shared_key = <<"none">>
+        /\ client_shared_key = <<"none">>
+        /\ server_code = <<"none">>
+        /\ ios_code = <<"none">>
+        /\ received_code = <<"none">>
         /\ code_attempts = 0
         /\ device_secret = "none"
         /\ paired_devices = {}
@@ -759,16 +759,16 @@ Spec == /\ Init /\ [][Next]_vars
 \* Verification properties
 \* A revoked pairing token is never accepted again
 NoTokenReuse == used_tokens \intersect active_tokens = {}
-\* If MitM occurred and both sides computed codes, the codes differ
-MitMDetectedByCodeMismatch == (adversary_keys /= {} /\ jevond_state \notin {jevond_Idle, jevond_GenerateToken, jevond_RegisterRelay, jevond_WaitingForClient} /\ ios_state \notin {ios_Idle, ios_ScanQR, ios_ConnectRelay, ios_GenKeyPair, ios_WaitAck, ios_E2EReady}) => server_code /= ios_code
-\* If MitM occurred, pairing never completes (code mismatch aborts it)
-MitMPrevented == adversary_keys /= {} => jevond_state \notin {jevond_StorePaired, jevond_Paired, jevond_AuthCheck, jevond_SessionActive}
+\* If the current session's shared key is compromised and both sides computed codes, the codes differ
+MitMDetectedByCodeMismatch == (server_shared_key \in adversary_keys /\ server_code /= <<"none">> /\ ios_code /= <<"none">>) => server_code /= ios_code
+\* If the current session's key is compromised, pairing never completes
+MitMPrevented == server_shared_key \in adversary_keys => jevond_state \notin {jevond_StorePaired, jevond_Paired, jevond_AuthCheck, jevond_SessionActive}
 \* A session is only active for a device that completed pairing
 AuthRequiresCompletedPairing == jevond_state = jevond_SessionActive => received_device_id \in paired_devices
 \* Each auth nonce is accepted at most once
 NoNonceReuse == jevond_state = jevond_SessionActive => received_auth_nonce \notin (auth_nonces_used \ {received_auth_nonce})
 \* Pairing only completes with the correct confirmation code
-WrongCodeDoesNotPair == (jevond_state = jevond_StorePaired \/ jevond_state = jevond_Paired) => received_code = server_code \/ received_code = "none"
+WrongCodeDoesNotPair == (jevond_state = jevond_StorePaired \/ jevond_state = jevond_Paired) => received_code = server_code \/ received_code = <<"none">>
 \* Adversary never learns the device secret in plaintext
 DeviceSecretSecrecy == \A m \in adversary_knowledge : "type" \in DOMAIN m => m.type /= "plaintext_secret"
 \* If all actors cooperate honestly (no MitM), pairing eventually completes
