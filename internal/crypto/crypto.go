@@ -9,6 +9,7 @@
 package crypto
 
 import (
+	"bytes"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/ecdh"
@@ -16,6 +17,7 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"errors"
+	"fmt"
 	"sync"
 	"sync/atomic"
 
@@ -74,6 +76,29 @@ func GenerateSecret() ([]byte, error) {
 	secret := make([]byte, 32)
 	_, err := rand.Read(secret)
 	return secret, err
+}
+
+// DeriveConfirmationCode computes a 6-digit confirmation code from
+// both ECDH public keys. The code is deterministic and
+// order-independent: DeriveConfirmationCode(a, b) == DeriveConfirmationCode(b, a).
+//
+// Both sides of the key exchange compute this independently. Under
+// honest conditions, both derive the same code. Under a MitM attack
+// (where the adversary substituted its own public key), each side
+// computes a different code — the mismatch aborts pairing.
+func DeriveConfirmationCode(pubA, pubB *ecdh.PublicKey) (string, error) {
+	a, b := pubA.Bytes(), pubB.Bytes()
+	if bytes.Compare(a, b) > 0 {
+		a, b = b, a
+	}
+	ikm := append(a, b...)
+	r := hkdf.New(sha256.New, ikm, nil, []byte("pairing-confirmation"))
+	buf := make([]byte, 4)
+	if _, err := r.Read(buf); err != nil {
+		return "", err
+	}
+	code := binary.BigEndian.Uint32(buf) % 1000000
+	return fmt.Sprintf("%06d", code), nil
 }
 
 // Channel provides symmetric encryption/decryption for a WebSocket

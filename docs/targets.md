@@ -67,6 +67,18 @@ SQLite tracks workers for observability. cworkers absorbed into jevond.
 - All sub-targets achieved.
 - cworkers repo archived after absorption complete.
 
+**Alternative to evaluate:** Grok's full-duplex realtime API
+(`wss://api.x.ai/v1/realtime`) as the primary agent backend instead of
+Claude Code subprocesses. Benefits: native WebSocket (matches jevond's
+architecture), single connection for text + voice, no subprocess
+management. Trade-offs: vendor lock-in to xAI, loss of Claude Code's
+tool ecosystem, unknown MCP support. Known UX issue: Grok's voice mode
+continues speaking for several seconds after an interruption is
+captured, making it hard to maintain conversational thread — jevond's
+interruption handling (🎯T13) must cut output immediately on new
+utterance, not just queue it. Evaluate before committing to the
+subprocess model.
+
 **Prior design:** `docs/vision-v2.md` (superseded by this simpler model)
 
 #### 🎯T8.1 Worker dispatch foundation
@@ -480,6 +492,36 @@ considers the full accumulated input before continuing.
 - Agent response interrupted and restarted when new input arrives.
 - Extended silence closes the OpenAI connection (back to local VAD).
 - No API keys stored on device — ephemeral token flow via jevond.
+
+### 🎯T15 Protocol state machines are formally verifiable
+
+- **Value**: 13
+- **Cost**: 8
+- **Weight**: 1.6 (value 13 / cost 8)
+- **Status**: converging — framework built, pairing ceremony modelled with 8 adversary capabilities and 8 properties. MitM vulnerability found and fixed (key-bound confirmation codes). TLA+ spec generated. Remaining: run TLC to verify properties.
+- **Discovered**: 2026-03-21
+- **Forked-from**: 🎯T14
+
+**Desired state:** Protocol state machines are defined as data (transition
+tables) that serve as the single source of truth. The same definition
+drives both runtime execution in Go and TLA+ spec generation. Protocol
+logic bugs are catchable by model checking against the actual code.
+
+**Architecture:**
+- `internal/protocol/` package with declarative transition table types.
+- Runtime executor: table-driven state machine enforcing valid transitions.
+- TLA+ exporter: generates spec with one PlusCal process per actor,
+  message channels, and Dolev-Yao adversary overlay.
+- Pairing ceremony (🎯T14) defined using this framework.
+
+**Acceptance criteria:**
+- Protocol defined as Go structs (actors, states, transitions, messages,
+  guards, properties).
+- Runtime `Machine` enforces transitions — rejects invalid messages.
+- `ExportTLA()` emits a valid TLA+ spec that TLC can check.
+- Pairing ceremony modelled; TLC verifies no-replay, token-exhaustion,
+  and authentication properties.
+- No drift possible between runtime and model — single source of truth.
 
 ## Achieved
 

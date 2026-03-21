@@ -189,3 +189,53 @@ func TestDeriveKeyFromSecret(t *testing.T) {
 		t.Fatal("different nonces should produce different keys")
 	}
 }
+
+func TestDeriveConfirmationCode(t *testing.T) {
+	client, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	server, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Both sides compute the same code.
+	code1, err := DeriveConfirmationCode(server.Public, client.Public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	code2, err := DeriveConfirmationCode(client.Public, server.Public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code1 != code2 {
+		t.Fatalf("codes should be order-independent: %s vs %s", code1, code2)
+	}
+	if len(code1) != 6 {
+		t.Fatalf("expected 6-digit code, got %q", code1)
+	}
+
+	// MitM: adversary substitutes its own key — codes diverge.
+	adversary, err := GenerateKeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	codeServer, err := DeriveConfirmationCode(server.Public, adversary.Public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	codeClient, err := DeriveConfirmationCode(adversary.Public, client.Public)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if codeServer == codeClient {
+		t.Fatal("MitM codes should differ (collision — extremely unlikely)")
+	}
+	if codeServer == code1 {
+		t.Fatal("MitM server code should differ from honest code")
+	}
+	if codeClient == code1 {
+		t.Fatal("MitM client code should differ from honest code")
+	}
+}
