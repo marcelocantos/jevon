@@ -38,11 +38,12 @@ type Jevon struct {
 	onRawLog   RawLogFunc
 	onClaudeID ClaudeIDFunc
 
-	mu       sync.Mutex
-	queue    []Event
-	notify   chan struct{}
-	claudeID string // claude session ID for --resume
-	running  bool
+	mu           sync.Mutex
+	queue        []Event
+	notify       chan struct{}
+	claudeID     string              // claude session ID for --resume
+	running      bool
+	cancelInvoke context.CancelFunc  // cancels the active invoke, nil if idle
 }
 
 // ClaudeIDFunc is called when Jevon's claude session ID changes.
@@ -95,6 +96,12 @@ func (j *Jevon) Enqueue(ev Event) {
 
 	j.mu.Lock()
 	j.queue = append(j.queue, ev)
+	// Interrupt the active invocation when a new user message arrives.
+	// The event loop will restart with the accumulated context.
+	if ev.Kind == EventUserMessage && j.cancelInvoke != nil {
+		slog.Info("interrupting active invocation for new user input")
+		j.cancelInvoke()
+	}
 	j.mu.Unlock()
 
 	select {
@@ -130,14 +137,27 @@ func (j *Jevon) Run(ctx context.Context) {
 		prompt := FormatPrompt(batch)
 		slog.Debug("jevon invoking", "prompt", prompt)
 
-		if err := j.invoke(ctx, prompt); err != nil {
-			slog.Error("jevon invoke failed", "err", err)
-		}
+		// Create a cancellable context for this invocation.
+		// Enqueue cancels it when a new user message interrupts.
+		invokeCtx, invokeCancel := context.WithCancel(ctx)
+		j.mu.Lock()
+		j.cancelInvoke = invokeCancel
+		j.mu.Unlock()
+
+		err := j.invoke(invokeCtx, prompt)
+		invokeCancel() // clean up if invoke returned normally
 
 		j.mu.Lock()
+		j.cancelInvoke = nil
 		j.running = false
 		hasMore := len(j.queue) > 0
 		j.mu.Unlock()
+
+		if err != nil && invokeCtx.Err() == context.Canceled {
+			slog.Info("invocation interrupted by new user input")
+		} else if err != nil {
+			slog.Error("jevon invoke failed", "err", err)
+		}
 
 		j.emitStatus("idle")
 
@@ -151,7 +171,9 @@ func (j *Jevon) Run(ctx context.Context) {
 }
 
 func (j *Jevon) invoke(ctx context.Context, prompt string) error {
-	invokeCtx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	// Apply timeout on top of the caller's context (which may be
+	// cancelled by Enqueue for interruption).
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
 
 	args := []string{
@@ -181,7 +203,7 @@ func (j *Jevon) invoke(ctx context.Context, prompt string) error {
 	// Pass prompt via stdin.
 	slog.Debug("spawning jevon claude", "args", args)
 
-	cmd := exec.CommandContext(invokeCtx, "claude", args...)
+	cmd := exec.CommandContext(ctx, "claude", args...)
 	cmd.Dir = j.cfg.WorkDir
 	cmd.Stdin = strings.NewReader(prompt)
 

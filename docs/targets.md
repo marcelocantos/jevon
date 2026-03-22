@@ -461,7 +461,7 @@ no user interaction.
 - **Value**: 13
 - **Cost**: 8
 - **Weight**: 1.6 (value 13 / cost 8)
-- **Status**: identified
+- **Status**: converging — iOS VoiceManager complete (local VAD, OpenAI Realtime streaming, utterance detection), token proxy endpoint in jevond, interruption handling added (cancel active invocation on new user input). Remaining: test on real device with Pippa.
 - **Discovered**: 2026-03-21
 
 **Desired state:** The user speaks continuously into the iOS app. Each
