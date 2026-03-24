@@ -5,6 +5,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"log/slog"
 	"os"
@@ -26,10 +27,16 @@ func (w ternWriter) Close() error { return w.conn.Close() }
 
 // ConnectRelay registers with a tern relay server and bridges traffic.
 // Returns the instance ID.
-func (s *Server) ConnectRelay(ctx context.Context, relayURL string) (string, error) {
+func (s *Server) ConnectRelay(ctx context.Context, relayURL, token string) (string, error) {
 	slog.Info("connecting to relay", "url", relayURL)
 
-	conn, err := tern.Register(ctx, relayURL)
+	var opts []tern.Option
+	opts = append(opts, tern.WithTLS(&tls.Config{InsecureSkipVerify: true}))
+	if token != "" {
+		opts = append(opts, tern.WithToken(token))
+	}
+
+	conn, err := tern.Register(ctx, relayURL, opts...)
 	if err != nil {
 		return "", err
 	}

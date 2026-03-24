@@ -117,7 +117,8 @@ Do not run other commands.
 
 func main() {
 	port := flag.Int("port", 13705, "listen port")
-	relayURL := flag.String("relay", "", "relay URL to register with (e.g. ws://localhost:8080)")
+	relayURL := flag.String("relay", "", "relay URL to register with (e.g. wss://tern.fly.dev)")
+	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
@@ -584,7 +585,11 @@ func main() {
 
 	// Connect to relay if specified, otherwise print direct QR code.
 	if *relayURL != "" {
-		instanceID, err := srv.ConnectRelay(ctx, *relayURL)
+		token := *relayToken
+		if token == "" {
+			token = os.Getenv("TERN_TOKEN")
+		}
+		instanceID, err := srv.ConnectRelay(ctx, *relayURL, token)
 		if err != nil {
 			slog.Error("relay connection failed", "err", err)
 			os.Exit(1)

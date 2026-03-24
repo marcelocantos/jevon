@@ -21,6 +21,7 @@ targets:
     platform: iOS
     dependencies:
       - package: TernCrypto
+      - package: TernRelay
     sources:
       - path: Jevon
         excludes: ["Models/E2ECrypto.swift", "Protocol/PairingCeremonyMachine.swift"]
