@@ -33,9 +33,27 @@ type TranscriptEntry struct {
 	Timestamp time.Time `json:"timestamp"`
 }
 
+// remoteWriter abstracts over WebSocket and tern relay connections.
+type remoteWriter interface {
+	WriteText(ctx context.Context, data []byte) error
+	WriteBinary(ctx context.Context, data []byte) error
+	Close() error
+}
+
+// wsWriter wraps a coder/websocket.Conn.
+type wsWriter struct{ conn *websocket.Conn }
+
+func (w wsWriter) WriteText(ctx context.Context, data []byte) error {
+	return w.conn.Write(ctx, websocket.MessageText, data)
+}
+func (w wsWriter) WriteBinary(ctx context.Context, data []byte) error {
+	return w.conn.Write(ctx, websocket.MessageBinary, data)
+}
+func (w wsWriter) Close() error { return w.conn.CloseNow() }
+
 type remoteConn struct {
-	conn *websocket.Conn
-	ctx  context.Context
+	writer remoteWriter
+	ctx    context.Context
 }
 
 // Server is the daisd HTTP/WebSocket server.
@@ -47,7 +65,8 @@ type Server struct {
 	version string
 
 	mu         sync.RWMutex
-	remotes    map[*websocket.Conn]remoteConn
+	remoteSeq  int
+	remotes    map[int]remoteConn
 	transcript []TranscriptEntry
 	turnBuf    string // accumulates Jevon text for current turn
 
@@ -69,7 +88,7 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 		mgr:       mgr,
 		db:        database,
 		version:   version,
-		remotes:   make(map[*websocket.Conn]remoteConn),
+		remotes:   make(map[int]remoteConn),
 		luaRT:     luaRT,
 		viewState: vs,
 	}
@@ -195,7 +214,7 @@ func (s *Server) BroadcastBinary(data []byte) {
 
 	for _, rc := range remotes {
 		writeCtx, cancel := context.WithTimeout(rc.ctx, 5*time.Second)
-		if err := rc.conn.Write(writeCtx, websocket.MessageBinary, data); err != nil {
+		if err := rc.writer.WriteBinary(writeCtx, data); err != nil {
 			slog.Debug("binary broadcast write failed", "err", err)
 		}
 		cancel()
@@ -283,12 +302,14 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 
 	// Register this connection.
 	s.mu.Lock()
-	s.remotes[conn] = remoteConn{conn: conn, ctx: ctx}
+	s.remoteSeq++
+	remoteID := s.remoteSeq
+	s.remotes[remoteID] = remoteConn{writer: wsWriter{conn: conn}, ctx: ctx}
 	s.mu.Unlock()
 
 	defer func() {
 		s.mu.Lock()
-		delete(s.remotes, conn)
+		delete(s.remotes, remoteID)
 		s.mu.Unlock()
 	}()
 
@@ -415,7 +436,7 @@ func (s *Server) Broadcast(v any) {
 
 	for _, rc := range remotes {
 		writeCtx, cancel := context.WithTimeout(rc.ctx, 5*time.Second)
-		if err := rc.conn.Write(writeCtx, websocket.MessageText, data); err != nil {
+		if err := rc.writer.WriteText(writeCtx, data); err != nil {
 			slog.Debug("broadcast write failed", "err", err)
 		}
 		cancel()
