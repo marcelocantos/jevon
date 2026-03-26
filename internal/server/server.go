@@ -21,9 +21,9 @@ import (
 
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/jevon/internal/db"
+	jvsync "github.com/marcelocantos/jevon/internal/sync"
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
-	jvsync "github.com/marcelocantos/jevon/internal/sync"
 	"github.com/marcelocantos/jevon/internal/ui"
 )
 
@@ -358,19 +358,6 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 		s.PushView()
 	}
 
-	// Send sqlpipe handshake if sync is active.
-	if s.syncMgr != nil {
-		if hello, err := s.syncMgr.Hello(); err != nil {
-			slog.Error("sqlpipe hello failed", "err", err)
-		} else if len(hello) > 0 {
-			writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-			if err := conn.Write(writeCtx, websocket.MessageBinary, hello); err != nil {
-				slog.Debug("sqlpipe hello write failed", "err", err)
-			}
-			cancel()
-		}
-	}
-
 	// Read loop: process messages from remote.
 	for {
 		mt, data, err := conn.Read(ctx)
@@ -381,22 +368,8 @@ func (s *Server) handleRemote(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
-		// Binary messages → sqlpipe protocol.
+		// Skip binary messages.
 		if mt == websocket.MessageBinary {
-			if s.syncMgr != nil {
-				resp, err := s.syncMgr.HandleMessage(data)
-				if err != nil {
-					slog.Error("sqlpipe handle error", "err", err)
-					continue
-				}
-				if len(resp) > 0 {
-					writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-					if err := conn.Write(writeCtx, websocket.MessageBinary, resp); err != nil {
-						slog.Debug("sqlpipe response write failed", "err", err)
-					}
-					cancel()
-				}
-			}
 			continue
 		}
 

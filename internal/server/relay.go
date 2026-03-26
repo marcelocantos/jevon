@@ -27,7 +27,7 @@ func (w ternWriter) Close() error { return w.conn.Close() }
 
 // ConnectRelay registers with a tern relay server and bridges traffic.
 // Returns the instance ID.
-func (s *Server) ConnectRelay(ctx context.Context, relayURL, token string) (string, error) {
+func (s *Server) ConnectRelay(ctx context.Context, relayURL, token, instanceID string) (string, error) {
 	slog.Info("connecting to relay", "url", relayURL)
 
 	var opts []tern.Option
@@ -35,13 +35,16 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token string) (stri
 	if token != "" {
 		opts = append(opts, tern.WithToken(token))
 	}
+	if instanceID != "" {
+		opts = append(opts, tern.WithInstanceID(instanceID))
+	}
 
 	conn, err := tern.Register(ctx, relayURL, opts...)
 	if err != nil {
 		return "", err
 	}
 
-	instanceID := conn.InstanceID()
+	instanceID = conn.InstanceID()
 	slog.Info("registered with relay", "instance_id", instanceID)
 
 	// Register as a virtual remote client.
@@ -108,16 +111,7 @@ func (s *Server) ConnectRelay(ctx context.Context, relayURL, token string) (stri
 				Text   string `json:"text"`
 			}
 			if err := json.Unmarshal(data, &msg); err != nil {
-				// Binary frame (sqlpipe sync).
-				if s.syncMgr != nil {
-					if resp, err := s.syncMgr.HandleMessage(data); err != nil {
-						slog.Error("relay: sync receive failed", "err", err)
-					} else if len(resp) > 0 {
-						sendCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
-						conn.Send(sendCtx, resp)
-						cancel()
-					}
-				}
+				slog.Debug("relay: non-JSON message, skipping")
 				continue
 			}
 
