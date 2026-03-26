@@ -559,8 +559,24 @@ func main() {
 	})
 
 	mux := http.NewServeMux()
+
+	// Dev server: serve web/ from disk with hot reload.
+	// Registered first — GET / is a catch-all fallback;
+	// more specific routes registered after take precedence.
+	webDir := filepath.Join(filepath.Dir(os.Args[0]), "..", "web")
+	if abs, err := filepath.Abs(webDir); err == nil {
+		webDir = abs
+	}
+	devSrv := server.NewDevServer(webDir)
+	devSrv.RegisterRoutes(mux)
+
 	srv.RegisterRoutes(mux)
 	mcpSrv.RegisterRoutes(mux)
+	go func() {
+		if err := devSrv.Watch(); err != nil {
+			slog.Error("dev server watch failed", "err", err)
+		}
+	}()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -572,7 +588,7 @@ func main() {
 	go jev.Run(ctx)
 
 	// Start a direct Claude process for the /ws/chat endpoint.
-	chatProc, err := claude.Start(claude.Config{WorkDir: *workDir})
+	chatProc, err := claude.Start(claude.Config{WorkDir: jevDir})
 	if err != nil {
 		slog.Error("chat claude failed to start", "err", err)
 	} else {

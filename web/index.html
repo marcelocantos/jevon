@@ -95,6 +95,15 @@ function send() {
 input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
 sendBtn.addEventListener('click', send);
 connect();
+
+// Hot reload — reconnects when server signals file change.
+(function hotReload() {
+  const rh = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
+  const rws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+rh+'/ws/reload');
+  rws.onmessage = () => location.reload();
+  rws.onclose = () => setTimeout(hotReload, 2000);
+})();
 </script>
 </body>
 </html>
+<!-- hot reload test -->
