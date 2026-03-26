@@ -41,6 +41,7 @@ type EventFunc func(Event)
 // Config configures a Claude Code process.
 type Config struct {
 	WorkDir        string   // working directory
+	SessionID      string   // persistent session ID (empty = new random session)
 	Model          string   // model override (empty = default)
 	PermissionMode string   // permission mode (default: bypassPermissions)
 	ExtraArgs      []string // additional CLI args
@@ -70,13 +71,23 @@ func Start(cfg Config) (*Process, error) {
 		cfg.PermissionMode = "bypassPermissions"
 	}
 
-	sessionID := uuid.New().String()
+	sessionID := cfg.SessionID
+	if sessionID == "" {
+		sessionID = uuid.New().String()
+	}
 	jsonlDir := projectDir(workDir)
 	jsonlPath := filepath.Join(jsonlDir, sessionID+".jsonl")
+
+	// If the JSONL already exists, this is a resume — use --resume.
+	_, statErr := os.Stat(jsonlPath)
+	resuming := statErr == nil
 
 	args := []string{
 		"--permission-mode", cfg.PermissionMode,
 		"--session-id", sessionID,
+	}
+	if resuming {
+		args = append(args, "--resume", sessionID)
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)

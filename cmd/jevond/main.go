@@ -17,6 +17,7 @@ import (
 
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 
+	"github.com/google/uuid"
 	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
@@ -587,8 +588,20 @@ func main() {
 	// Start Jevon event loop (legacy — manages its own Claude process).
 	go jev.Run(ctx)
 
+	// Load or create a persistent chat session ID.
+	chatSessionFile := filepath.Join(homeDir, ".jevon", "chat-session-id")
+	chatSessionID := ""
+	if data, err := os.ReadFile(chatSessionFile); err == nil {
+		chatSessionID = strings.TrimSpace(string(data))
+	}
+	if chatSessionID == "" {
+		chatSessionID = uuid.New().String()
+		os.WriteFile(chatSessionFile, []byte(chatSessionID+"\n"), 0o644)
+	}
+	slog.Info("chat session", "id", chatSessionID)
+
 	// Start a direct Claude process for the /ws/chat endpoint.
-	chatProc, err := claude.Start(claude.Config{WorkDir: jevDir})
+	chatProc, err := claude.Start(claude.Config{WorkDir: jevDir, SessionID: chatSessionID})
 	if err != nil {
 		slog.Error("chat claude failed to start", "err", err)
 	} else {
