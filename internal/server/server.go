@@ -20,6 +20,7 @@ import (
 	"time"
 
 	"github.com/coder/websocket"
+	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/db"
 	jvsync "github.com/marcelocantos/jevon/internal/sync"
 	"github.com/marcelocantos/jevon/internal/jevon"
@@ -77,7 +78,9 @@ type Server struct {
 	lastScreenshot string
 	screenshotCh   chan string
 
-	openAIKey string // set via SetOpenAIKey
+	openAIKey     string // set via SetOpenAIKey
+	proc          *claude.Process
+	chatListeners []chan string
 }
 
 // New creates a Server with the given Jevon instance, manager, database, version string,
@@ -243,6 +246,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 		w.Write(indexHTML)
 	})
 	mux.HandleFunc("GET /health", s.handleHealth)
+	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)

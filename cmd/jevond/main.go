@@ -17,6 +17,7 @@ import (
 
 	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 
+	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/cli"
 	"github.com/marcelocantos/jevon/internal/db"
 	"github.com/marcelocantos/jevon/internal/discovery"
@@ -119,6 +120,7 @@ func main() {
 	port := flag.Int("port", 13705, "listen port")
 	relayURL := flag.String("relay", "", "relay URL to register with (e.g. wss://tern.fly.dev)")
 	relayToken := flag.String("relay-token", "", "bearer token for relay authentication (or set TERN_TOKEN env var)")
+	relayInstanceID := flag.String("instance-id", "", "persistent relay instance ID (enables reconnect without re-pairing)")
 	workDir := flag.String("workdir", ".", "default working directory for worker sessions")
 	model := flag.String("model", "", "default model for worker sessions")
 	jevonModel := flag.String("jevon-model", "", "model for Jevon (default: same as --model)")
@@ -566,8 +568,26 @@ func main() {
 	sigCh := make(chan os.Signal, 1)
 	signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 
-	// Start Jevon event loop.
+	// Start Jevon event loop (legacy — manages its own Claude process).
 	go jev.Run(ctx)
+
+	// Start a direct Claude process for the /ws/chat endpoint.
+	chatProc, err := claude.Start(claude.Config{WorkDir: *workDir})
+	if err != nil {
+		slog.Error("chat claude failed to start", "err", err)
+	} else {
+		srv.SetProcess(chatProc)
+		chatProc.OnEvent(func(ev claude.Event) {
+			// Broadcast raw JSONL to /ws/chat listeners.
+			srv.BroadcastChat(string(ev.Raw))
+
+			// Also persist assistant responses to transcript.
+			if ev.Type == "assistant" && ev.Text != "" {
+				srv.AppendTranscript("jevon", ev.Text)
+			}
+		})
+		defer chatProc.Stop()
+	}
 
 	listenAddr := fmt.Sprintf(":%d", *port)
 	httpSrv := &http.Server{Addr: listenAddr, Handler: mux}
@@ -589,7 +609,7 @@ func main() {
 		if token == "" {
 			token = os.Getenv("TERN_TOKEN")
 		}
-		instanceID, err := srv.ConnectRelay(ctx, *relayURL, token)
+		instanceID, err := srv.ConnectRelay(ctx, *relayURL, token, *relayInstanceID)
 		if err != nil {
 			slog.Error("relay connection failed", "err", err)
 			os.Exit(1)

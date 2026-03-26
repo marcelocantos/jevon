@@ -10,7 +10,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"log/slog"
 	"os"
 	"os/exec"
@@ -113,8 +112,22 @@ func Start(cfg Config) (*Process, error) {
 		alive:     true,
 	}
 
-	// Drain PTY output.
-	go io.Copy(io.Discard, ptmx)
+	// Drain PTY output — log first chunk to verify claude started.
+	go func() {
+		buf := make([]byte, 4096)
+		first := true
+		for {
+			n, err := ptmx.Read(buf)
+			if n > 0 && first {
+				slog.Info("pty first output", "bytes", n)
+				first = false
+			}
+			if err != nil {
+				slog.Info("pty read done", "err", err)
+				return
+			}
+		}
+	}()
 
 	// Monitor process exit.
 	go func() {
@@ -159,7 +172,9 @@ func (p *Process) Send(msg string) error {
 	if !alive {
 		return fmt.Errorf("claude process not running")
 	}
-	_, err := p.ptmx.Write([]byte(msg + "\r"))
+	data := []byte(msg + "\r")
+	n, err := p.ptmx.Write(data)
+	slog.Info("pty write", "bytes", n, "err", err, "data", string(data))
 	return err
 }
 

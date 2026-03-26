@@ -41,7 +41,7 @@ let ws, streaming = null;
 function connect() {
   // Use 127.0.0.1 explicitly — browsers throttle WebSocket upgrades on "localhost".
   const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
-  ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/remote');
+  ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
   ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; console.log('ws open', Date.now()); };
   ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting...'; sendBtn.disabled=true; streaming=null; setTimeout(connect,2000); };
   ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){} };
@@ -58,6 +58,19 @@ function handle(m) {
   } else if (m.type==='status') {
     if (m.state==='thinking') { sTxt.textContent='thinking...'; streaming=null; }
     else { sTxt.textContent='connected'; streaming=null; }
+  } else if (m.type==='assistant') {
+    // JSONL event from Claude process.
+    const content = m.message?.content;
+    if (content) {
+      for (const c of content) {
+        if (c.type==='text') add('jevon', c.text);
+      }
+    }
+    streaming = null;
+    sTxt.textContent = 'connected';
+  } else if (m.type==='system') {
+    sTxt.textContent = 'connected';
+    streaming = null;
   }
 }
 
@@ -74,7 +87,7 @@ function send() {
   const t = input.value.trim();
   if (!t||!ws||ws.readyState!==1) return;
   add('user', t);
-  ws.send(JSON.stringify({type:'action',action:'send_message',value:t}));
+  ws.send(t);
   input.value = '';
   streaming = null;
 }

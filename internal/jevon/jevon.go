@@ -150,6 +150,8 @@ func (j *Jevon) Enqueue(ev Event) {
 		ev.Timestamp = time.Now()
 	}
 
+	slog.Info("jevon enqueue", "kind", ev.Kind, "text", ev.Text)
+
 	if ev.Kind != EventUserMessage {
 		return
 	}
@@ -168,10 +170,9 @@ func (j *Jevon) Enqueue(ev Event) {
 	j.mu.Unlock()
 	j.emitStatus("thinking")
 
-	prompt := FormatPrompt([]Event{ev})
-	slog.Debug("jevon sending", "prompt", prompt)
+	slog.Info("jevon sending to claude", "text", ev.Text)
 
-	if err := proc.Send(prompt); err != nil {
+	if err := proc.Send(ev.Text); err != nil {
 		slog.Error("jevon: send failed", "err", err)
 		j.mu.Lock()
 		j.waiting = false
