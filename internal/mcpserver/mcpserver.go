@@ -17,6 +17,7 @@ import (
 
 	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/manager"
+	"github.com/marcelocantos/jevon/internal/memory"
 	"github.com/marcelocantos/jevon/internal/session"
 )
 
@@ -44,6 +45,7 @@ type TranscriptOps struct {
 type Server struct {
 	mgr          *manager.Manager
 	registry     *claude.Registry
+	memory       *memory.Store
 	workerWD     string
 	onDone       EventCallback
 	reloadViews  ReloadViewsFunc

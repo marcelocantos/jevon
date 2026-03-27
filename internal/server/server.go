@@ -21,7 +21,6 @@ import (
 	"github.com/coder/websocket"
 	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/db"
-	jvsync "github.com/marcelocantos/jevon/internal/sync"
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
 	"github.com/marcelocantos/jevon/internal/ui"
@@ -62,7 +61,6 @@ type Server struct {
 	jevon   *jevon.Jevon
 	mgr     *manager.Manager
 	db      *db.DB
-	syncMgr *jvsync.SyncManager // nil until sqlpipe is wired up
 	version string
 
 	mu         sync.RWMutex
@@ -79,6 +77,7 @@ type Server struct {
 
 	openAIKey     string // set via SetOpenAIKey
 	proc          *claude.Process
+	registry      *claude.Registry
 	chatListeners []chan string
 }
 
@@ -136,10 +135,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"content": text,
 		})
 
-		// Sync: append to streaming_text in server_state.
-		if s.syncMgr != nil {
-			s.syncBroadcast(s.syncMgr.AppendStreamingText(text))
-		}
 
 		if s.viewState != nil {
 			s.viewState.UpdateStreamingText(text)
@@ -164,11 +159,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 				if err := s.db.AppendTranscript("jevon", turnText); err != nil {
 					slog.Error("failed to persist jevon turn", "err", err)
 				}
-				// Sync: persist to sync_transcript and clear streaming_text.
-				if s.syncMgr != nil {
-					s.syncBroadcast(s.syncMgr.WriteTranscript("jevon", turnText))
-					s.syncBroadcast(s.syncMgr.ClearStreamingText())
-				}
 			}
 
 			if s.viewState != nil {
@@ -181,10 +171,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 			"state": state,
 		})
 
-		// Sync: update status in server_state.
-		if s.syncMgr != nil {
-			s.syncBroadcast(s.syncMgr.WriteServerState(state, ""))
-		}
 
 		if s.viewState != nil {
 			s.viewState.SetStatus(state)
@@ -195,12 +181,6 @@ func New(jev *jevon.Jevon, mgr *manager.Manager, database *db.DB, version string
 	return s
 }
 
-// SetSyncManager attaches the sqlpipe SyncManager. Must be called before
-// any clients connect. When set, the server sends sqlpipe binary frames
-// alongside JSON messages (dual-write during transition).
-func (s *Server) SetSyncManager(sm *jvsync.SyncManager) {
-	s.syncMgr = sm
-}
 
 // BroadcastBinary sends a binary WebSocket message to all connected clients.
 func (s *Server) BroadcastBinary(data []byte) {
@@ -224,15 +204,6 @@ func (s *Server) BroadcastBinary(data []byte) {
 	}
 }
 
-// syncBroadcast writes to a sync table and broadcasts the resulting
-// changeset to all clients. Logs errors internally.
-func (s *Server) syncBroadcast(wire []byte, err error) {
-	if err != nil {
-		slog.Error("sync write failed", "err", err)
-		return
-	}
-	s.BroadcastBinary(wire)
-}
 
 // RegisterRoutes adds HTTP and WebSocket routes to the mux.
 // Additional routes (e.g. MCP server) should be registered separately.
@@ -241,6 +212,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
+	mux.HandleFunc("GET /api/agents", s.handleListAgents)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/kill", s.handleKillSession)
@@ -458,10 +430,6 @@ func (s *Server) HandleUserMessage(text string) {
 		slog.Error("failed to persist user message", "err", err)
 	}
 
-	// Sync: persist to sync_transcript.
-	if s.syncMgr != nil {
-		s.syncBroadcast(s.syncMgr.WriteTranscript("user", text))
-	}
 
 	s.Broadcast(map[string]any{
 		"type":      "user_message",
@@ -565,34 +533,10 @@ func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action
 		})
 
 	case "list_snapshots":
-		if s.syncMgr == nil {
-			respond(map[string]any{
-				"type":   "control",
-				"action": "list_snapshots",
-				"error":  "sync not available",
-			})
-			return
-		}
-		snapshots, err := s.syncMgr.ListSnapshots()
-		if err != nil {
-			respond(map[string]any{
-				"type":   "control",
-				"action": "list_snapshots",
-				"error":  err.Error(),
-			})
-			return
-		}
-		entries := make([]map[string]any, len(snapshots))
-		for i, snap := range snapshots {
-			entries[i] = map[string]any{
-				"snapshot":   snap.Snapshot,
-				"created_at": snap.CreatedAt,
-			}
-		}
 		respond(map[string]any{
-			"type":      "control",
-			"action":    "list_snapshots",
-			"snapshots": entries,
+			"type":   "control",
+			"action": "list_snapshots",
+			"error":  "sync not available",
 		})
 
 	case "exec_lua":
@@ -644,43 +588,10 @@ func (s *Server) handleControl(conn *websocket.Conn, ctx context.Context, action
 		s.mu.Unlock()
 
 	case "rollback":
-		if s.syncMgr == nil {
-			respond(map[string]any{
-				"type":   "control",
-				"action": "rollback",
-				"error":  "sync not available",
-			})
-			return
-		}
-		var snapshot int64
-		if _, err := fmt.Sscanf(value, "%d", &snapshot); err != nil {
-			respond(map[string]any{
-				"type":   "control",
-				"action": "rollback",
-				"error":  "invalid snapshot number",
-			})
-			return
-		}
-		flushData, err := s.syncMgr.RollbackScripts(snapshot)
-		if err != nil {
-			slog.Error("rollback failed", "snapshot", snapshot, "err", err)
-			respond(map[string]any{
-				"type":   "control",
-				"action": "rollback",
-				"error":  err.Error(),
-			})
-			return
-		}
-		// Broadcast updated scripts to all clients via sqlpipe.
-		s.syncBroadcast(flushData, nil)
-		// Also push scripts via the JSON path for clients without sqlpipe.
-		s.PushScripts()
-		slog.Info("scripts rolled back", "snapshot", snapshot)
 		respond(map[string]any{
-			"type":     "control",
-			"action":   "rollback",
-			"snapshot": snapshot,
-			"status":   "ok",
+			"type":   "control",
+			"action": "rollback",
+			"error":  "sync not available",
 		})
 
 	default:

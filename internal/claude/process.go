@@ -45,6 +45,7 @@ type Config struct {
 	SessionID      string   // persistent session ID (empty = new random session)
 	Model          string   // model override (empty = default)
 	PermissionMode string   // permission mode (default: bypassPermissions)
+	MCPConfig      string   // path to MCP config JSON (empty = use default discovery)
 	ExtraArgs      []string // additional CLI args
 }
 
@@ -83,12 +84,22 @@ func Start(cfg Config) (*Process, error) {
 	_, statErr := os.Stat(jsonlPath)
 	resuming := statErr == nil
 
+	// All agents spawned by jevond are forbidden from creating their own
+	// sub-agents. Jevond owns the process lifecycle exclusively. Agents
+	// request new workers via jevond's MCP tools.
+	disallowed := "Agent,TeamCreate,TeamDelete,SendMessage,EnterWorktree"
+
 	args := []string{
 		"--permission-mode", cfg.PermissionMode,
-		"--session-id", sessionID,
+		"--disallowedTools", disallowed,
 	}
 	if resuming {
 		args = append(args, "--resume", sessionID)
+	} else {
+		args = append(args, "--session-id", sessionID)
+	}
+	if cfg.MCPConfig != "" {
+		args = append(args, "--mcp-config", cfg.MCPConfig)
 	}
 	if cfg.Model != "" {
 		args = append(args, "--model", cfg.Model)
@@ -97,7 +108,6 @@ func Start(cfg Config) (*Process, error) {
 
 	cmd := exec.Command("claude", args...)
 	cmd.Dir = workDir
-	cmd.Env = filterEnv(os.Environ(), "CLAUDECODE")
 
 	ptmx, pts, err := pty.Open()
 	if err != nil {
@@ -174,6 +184,18 @@ func (p *Process) OnEvent(fn EventFunc) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.onEvent = fn
+}
+
+// Interrupt sends Esc to the Claude process to cancel the current turn.
+func (p *Process) Interrupt() error {
+	p.mu.Lock()
+	alive := p.alive
+	p.mu.Unlock()
+	if !alive {
+		return fmt.Errorf("claude process not running")
+	}
+	_, err := p.ptmx.Write([]byte("\x1b"))
+	return err
 }
 
 // Send writes a user message to the Claude process.
@@ -329,13 +351,3 @@ func projectDir(workDir string) string {
 	return filepath.Join(os.Getenv("HOME"), ".claude", "projects", escaped.String())
 }
 
-func filterEnv(env []string, exclude string) []string {
-	var out []string
-	prefix := exclude + "="
-	for _, e := range env {
-		if !strings.HasPrefix(e, prefix) {
-			out = append(out, e)
-		}
-	}
-	return out
-}

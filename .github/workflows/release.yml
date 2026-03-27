@@ -16,9 +16,11 @@ jobs:
         with:
           go-version-file: go.mod
       - name: Test
+        env:
+          CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"
         run: |
           cp agents-guide.md internal/cli/help_agent.md
-          go test ./...
+          go test -tags "sqlite_preupdate_hook sqlite_fts5" ./...
 
   build:
     needs: test
@@ -50,6 +52,7 @@ jobs:
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           CGO_ENABLED: "1"
+          CGO_CFLAGS: "-DSQLITE_ENABLE_SESSION -DSQLITE_ENABLE_PREUPDATE_HOOK -DSQLITE_ENABLE_FTS5"
         run: |
           VERSION="${GITHUB_REF_NAME#v}"
           LDFLAGS="-X github.com/marcelocantos/jevon/internal/cli.Version=${VERSION}"
@@ -60,8 +63,10 @@ jobs:
             CC=aarch64-linux-gnu-gcc
           fi
 
-          CC="${CC}" go build -ldflags "${LDFLAGS}" -o jevond ./cmd/jevond
-          CC="${CC}" go build -ldflags "${LDFLAGS}" -o remote ./cmd/remote
+          CC="${CC}" go build -tags "sqlite_preupdate_hook sqlite_fts5" \
+            -ldflags "${LDFLAGS}" -o jevond ./cmd/jevond
+          CC="${CC}" go build -tags "sqlite_preupdate_hook sqlite_fts5" \
+            -ldflags "${LDFLAGS}" -o remote ./cmd/remote
 
           tar czf "jevon-${VERSION}-${{ matrix.goos }}-${{ matrix.goarch }}.tar.gz" \
             jevond remote
