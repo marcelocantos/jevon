@@ -8,7 +8,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-:root {
+:root, [data-theme="dark"] {
   --bg: #0c0c0f;
   --surface: #14141a;
   --surface-raised: #1c1c24;
@@ -25,9 +25,38 @@
   --green: #34d399;
   --red: #f87171;
   --amber: #fbbf24;
+  --heading: #fff;
+  --strong: #fff;
+  --dot-on-glow: rgba(52,211,153,0.4);
+  --dot-off-glow: rgba(248,113,113,0.3);
+  --agent-dot-glow: rgba(52,211,153,0.3);
   --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
   --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
   --radius: 10px;
+}
+
+[data-theme="light"] {
+  --bg: #f8f8fa;
+  --surface: #ffffff;
+  --surface-raised: #f0f0f4;
+  --surface-high: #e4e4ea;
+  --border: rgba(0,0,0,0.08);
+  --border-focus: rgba(0,0,0,0.18);
+  --text: #2c2c34;
+  --text-dim: #6e6e7a;
+  --text-muted: #a0a0aa;
+  --accent: #6d5dd3;
+  --accent-dim: rgba(109,93,211,0.1);
+  --user-bg: rgba(109,93,211,0.08);
+  --user-border: rgba(109,93,211,0.2);
+  --green: #10b981;
+  --red: #ef4444;
+  --amber: #d97706;
+  --heading: #1a1a22;
+  --strong: #1a1a22;
+  --dot-on-glow: rgba(16,185,129,0.3);
+  --dot-off-glow: rgba(239,68,68,0.2);
+  --agent-dot-glow: rgba(16,185,129,0.25);
 }
 
 * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -36,8 +65,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* Status bar */
 #status { padding: 6px 20px; font-size: 11px; font-weight: 500; color: var(--text-dim); background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; align-items: center; gap: 8px; letter-spacing: 0.02em; text-transform: uppercase; }
 .dot { width: 6px; height: 6px; border-radius: 50%; }
-.dot.on { background: var(--green); box-shadow: 0 0 6px rgba(52,211,153,0.4); }
-.dot.off { background: var(--red); box-shadow: 0 0 6px rgba(248,113,113,0.3); }
+.dot.on { background: var(--green); box-shadow: 0 0 6px var(--dot-on-glow); }
+.dot.off { background: var(--red); box-shadow: 0 0 6px var(--dot-off-glow); }
 
 #main { flex: 1; display: flex; overflow: hidden; }
 
@@ -61,7 +90,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevon pre code { background: none; padding: 0; color: var(--text); }
 .msg.jevon ul, .msg.jevon ol { padding-left: 1.5em; margin: 0.5em 0; }
 .msg.jevon li { margin: 0.2em 0; }
-.msg.jevon h1, .msg.jevon h2, .msg.jevon h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: #fff; }
+.msg.jevon h1, .msg.jevon h2, .msg.jevon h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: var(--heading); }
 .msg.jevon h1 { font-size: 1.1em; }
 .msg.jevon h2 { font-size: 1.05em; }
 .msg.jevon h3 { font-size: 1em; }
@@ -69,7 +98,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .msg.jevon table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em; }
 .msg.jevon th, .msg.jevon td { border: 1px solid var(--border); padding: 6px 10px; }
 .msg.jevon th { background: var(--surface); font-weight: 500; }
-.msg.jevon strong { color: #fff; font-weight: 600; }
+.msg.jevon strong { color: var(--strong); font-weight: 600; }
 .msg.jevon a { color: var(--accent); text-decoration: none; }
 .msg.jevon a:hover { text-decoration: underline; }
 
@@ -98,11 +127,17 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 /* Right pane: agents */
 #activity-pane { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border); }
 #activity-header { padding: 10px 16px; font-size: 10px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.08em; }
+
+/* Theme toggle */
+#theme-toggle { margin-left: auto; display: flex; gap: 2px; background: var(--surface-raised); border-radius: 5px; padding: 2px; }
+#theme-toggle button { border: none; background: none; color: var(--text-muted); font-size: 11px; padding: 2px 6px; border-radius: 3px; cursor: pointer; line-height: 1; }
+#theme-toggle button:hover { color: var(--text-dim); }
+#theme-toggle button.active { background: var(--accent-dim); color: var(--accent); }
 #agents { flex: 1; overflow-y: auto; padding: 8px 12px; }
 .agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
 .agent-node:hover { background: var(--surface-raised); }
 .agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
-.agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px rgba(52,211,153,0.3); }
+.agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px var(--agent-dot-glow); }
 .agent-node .agent-dot.stopped { background: var(--text-muted); }
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; }
@@ -110,7 +145,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 </style>
 </head>
 <body>
-<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span></div>
+<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span><div id="theme-toggle"><button data-t="light" title="Light">&#9788;</button><button data-t="system" title="System" class="active">&#9680;</button><button data-t="dark" title="Dark">&#9790;</button></div></div>
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
@@ -298,6 +333,27 @@ function send() {
 input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
 sendBtn.addEventListener('click', send);
 connect();
+
+// Theme toggle.
+function applyTheme(pref) {
+  const html = document.documentElement;
+  if (pref === 'system') {
+    html.removeAttribute('data-theme');
+    const mq = window.matchMedia('(prefers-color-scheme: light)');
+    html.setAttribute('data-theme', mq.matches ? 'light' : 'dark');
+    mq.onchange = e => { if (localStorage.getItem('theme')==='system') html.setAttribute('data-theme', e.matches?'light':'dark'); };
+  } else {
+    html.setAttribute('data-theme', pref);
+  }
+  document.querySelectorAll('#theme-toggle button').forEach(b => b.classList.toggle('active', b.dataset.t===pref));
+}
+document.getElementById('theme-toggle').addEventListener('click', e => {
+  const btn = e.target.closest('button');
+  if (!btn) return;
+  localStorage.setItem('theme', btn.dataset.t);
+  applyTheme(btn.dataset.t);
+});
+applyTheme(localStorage.getItem('theme') || 'system');
 
 // Hot reload.
 (function hotReload() {
