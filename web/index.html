@@ -331,7 +331,9 @@ function send() {
 }
 
 input.addEventListener('keydown', e => { if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();} });
+input.addEventListener('blur', () => setTimeout(() => input.focus(), 0));
 sendBtn.addEventListener('click', send);
+input.focus();
 connect();
 
 // Theme toggle.
