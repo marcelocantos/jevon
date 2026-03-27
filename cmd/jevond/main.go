@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"log/slog"
+	"net"
 	"net/http"
 	"os"
 	"os/exec"
@@ -587,21 +588,33 @@ func main() {
 	}
 	slog.Info("chat agent", "session", chatDef.SessionID)
 
-	// Start all auto-start agents.
+	srv.SetRegistry(registry)
+
+	listenAddr := fmt.Sprintf(":%d", *port)
+	httpSrv := &http.Server{Addr: listenAddr, Handler: mux}
+
+	// Start HTTP server before agents so the MCP endpoint is reachable.
+	ln, err := net.Listen("tcp", listenAddr)
+	if err != nil {
+		slog.Error("listen failed", "err", err)
+		os.Exit(1)
+	}
+	go func() {
+		if err := httpSrv.Serve(ln); err != http.ErrServerClosed {
+			slog.Error("server failed", "err", err)
+		}
+	}()
+
+	// Now start agents — MCP server is reachable.
 	registry.StartAll()
 	defer registry.StopAll()
 
-	// Wire registry and chat agent to the web UI.
-	srv.SetRegistry(registry)
 	if chatProc := registry.Get("chat"); chatProc != nil {
 		srv.SetProcess(chatProc)
 		chatProc.OnEvent(func(ev claude.Event) {
 			srv.BroadcastChat(string(ev.Raw))
 		})
 	}
-
-	listenAddr := fmt.Sprintf(":%d", *port)
-	httpSrv := &http.Server{Addr: listenAddr, Handler: mux}
 
 	// Graceful shutdown on signal.
 	go func() {
@@ -643,10 +656,8 @@ func main() {
 		qr.Print(os.Stderr, directURL)
 	}
 
-	if err := httpSrv.ListenAndServe(); err != http.ErrServerClosed {
-		slog.Error("server failed", "err", err)
-		os.Exit(1)
-	}
+	// Block until shutdown signal.
+	<-ctx.Done()
 }
 
 // storeKeychainKey stores a value in the macOS Keychain under the "jevon" account.
