@@ -104,36 +104,32 @@ function handle(m) {
   } else if (typ==='assistant') {
     const content = m.message?.content;
     if (!Array.isArray(content)) return;
-    // Tool calls go into the collapsible section.
+    const hasText = content.some(c => c.type==='text' && c.text);
     content.forEach(c => {
       if (c.type==='tool_use') {
         addTurnItem('tool-use', c.name + (c.input ? ': ' + summariseInput(c.input) : ''));
         addActivity('tool', 'chat', c.name);
       }
     });
-    // Text responses are top-level messages. Close the turn first.
-    content.forEach(c => {
-      if (c.type==='text' && c.text) {
-        closeTurn();
-        addMsg('jevon', c.text);
-      }
-    });
+    // Only close the turn and show text when the assistant produces a final text response.
+    if (hasText) {
+      closeTurn();
+      content.forEach(c => {
+        if (c.type==='text' && c.text) addMsg('jevon', c.text);
+      });
+    }
 
   } else if (typ==='tool_result' || typ==='result') {
-    // Tool results go into the collapsible section.
     const content = m.content || m.message?.content;
     if (Array.isArray(content)) {
       content.forEach(c => {
-        if (c.type==='text' && c.text) {
-          addTurnItem('tool-result', truncate(c.text, 120));
-        }
+        if (c.type==='text' && c.text) addTurnItem('tool-result', truncate(c.text, 120));
       });
     } else if (typeof content === 'string') {
       addTurnItem('tool-result', truncate(content, 120));
     }
 
   } else if (typ==='system') {
-    // Turn complete — close the details section.
     closeTurn();
   }
 }
