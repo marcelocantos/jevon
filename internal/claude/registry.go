@@ -203,12 +203,34 @@ func (r *Registry) StopAll() {
 }
 
 // EnsureAgent registers an agent if it doesn't exist, using the given
-// defaults. Returns the definition (existing or new).
+// defaults. If an agent with the same workdir exists under a different
+// name, it is renamed. Returns the definition (existing or new).
 func (r *Registry) EnsureAgent(name, workDir, model string, autoStart bool) (*AgentDef, error) {
 	r.mu.Lock()
 	if def, ok := r.agents[name]; ok {
 		r.mu.Unlock()
 		return def, nil
+	}
+
+	// Check if an agent with the same workdir exists under a different name.
+	for oldName, def := range r.agents {
+		if def.WorkDir == workDir {
+			slog.Info("renaming agent", "from", oldName, "to", name)
+			delete(r.agents, oldName)
+			def.Name = name
+			r.agents[name] = def
+			// Migrate any running process to the new name.
+			if proc, ok := r.procs[oldName]; ok {
+				delete(r.procs, oldName)
+				r.procs[name] = proc
+			}
+			err := r.save()
+			r.mu.Unlock()
+			if err != nil {
+				return nil, err
+			}
+			return def, nil
+		}
 	}
 	r.mu.Unlock()
 
