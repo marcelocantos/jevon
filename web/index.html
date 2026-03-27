@@ -64,6 +64,7 @@ const dot = document.getElementById('dot');
 const sTxt = document.getElementById('status-text');
 const activity = document.getElementById('activity');
 let ws, streaming = null;
+const sentLocally = new Set();
 
 function connect() {
   const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
@@ -86,7 +87,11 @@ function handle(m) {
     });
     streaming = null;
   } else if (m.type==='user') {
-    // User message echo from JSONL — already shown locally.
+    // Show user messages from JSONL (e.g. from other clients or history).
+    const content = m.message?.content;
+    if (content) content.forEach(c => {
+      if (c.type==='text' && !sentLocally.delete(c.text)) addMsg('user', c.text);
+    });
   } else if (m.type==='system') {
     streaming = null;
   } else if (m.type==='progress') {
@@ -121,6 +126,7 @@ function send() {
   const t = input.value.trim();
   if (!t||!ws||ws.readyState!==1) return;
   addMsg('user', t);
+  sentLocally.add(t);
   ws.send(t);
   input.value = '';
   streaming = null;
