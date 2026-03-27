@@ -19,7 +19,6 @@ import (
 	"time"
 
 	"github.com/fsnotify/fsnotify"
-	"github.com/marcelocantos/sqldeep/go/sqldeep"
 	_ "github.com/mattn/go-sqlite3"
 )
 
@@ -435,13 +434,8 @@ func (s *Store) Stats() (*StatsResult, error) {
 }
 
 // Query runs a read-only SQL query and returns rows as maps.
-// Supports sqldeep syntax (FROM-first, nested JSON objects).
 func (s *Store) Query(query string) ([]map[string]any, error) {
-	transpiled, err := sqldeep.Transpile(query)
-	if err != nil {
-		return nil, fmt.Errorf("sqldeep: %w", err)
-	}
-	rows, err := s.db.Query(transpiled)
+	rows, err := s.db.Query(query)
 	if err != nil {
 		return nil, err
 	}

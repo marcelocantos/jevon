@@ -42,10 +42,6 @@ func (s *Server) SetMemory(mem *memory.Store) {
 		mcp.NewTool("jevon_memory_query",
 			mcp.WithDescription(`Run a read-only SQL query against the transcript memory database.
 
-Supports sqldeep syntax — a superset of SQL with FROM-first clause order and nested JSON object literals:
-  FROM messages WHERE role = 'user' ORDER BY timestamp DESC SELECT session_id, text LIMIT 10
-  FROM messages m WHERE project LIKE '%jevon%' SELECT { session_id, role, text, timestamp }
-
 Tables:
   messages (id, session_id, project, role, text, timestamp, type, is_noise)
   messages_fts — FTS5 virtual table (excludes noise). Use: WHERE messages_fts MATCH 'search terms'

@@ -11,7 +11,6 @@ require (
 	github.com/creack/pty v1.1.24
 	github.com/fsnotify/fsnotify v1.9.0
 	github.com/google/uuid v1.6.0
-	github.com/marcelocantos/sqldeep/go/sqldeep v0.0.0-20260314175629-e13d02565b66
 	github.com/marcelocantos/tern v0.7.0
 	github.com/mark3labs/mcp-go v0.44.1
 	github.com/mattn/go-sqlite3 v1.14.37
@@ -67,5 +66,3 @@ require (
 	golang.org/x/text v0.35.0 // indirect
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 )
-
-replace github.com/marcelocantos/sqldeep/go/sqldeep => /Users/marcelo/work/github.com/marcelocantos/sqldeep/go/sqldeep
