@@ -5,71 +5,112 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jevon</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
-* { margin: 0; padding: 0; box-sizing: border-box; }
-body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; background: #1a1a2e; color: #e0e0e0; height: 100vh; display: flex; flex-direction: column; }
+:root {
+  --bg: #0c0c0f;
+  --surface: #14141a;
+  --surface-raised: #1c1c24;
+  --surface-high: #24242e;
+  --border: rgba(255,255,255,0.06);
+  --border-focus: rgba(255,255,255,0.15);
+  --text: #d4d4dc;
+  --text-dim: #6e6e7a;
+  --text-muted: #44444e;
+  --accent: #8b7cf6;
+  --accent-dim: rgba(139,124,246,0.15);
+  --user-bg: rgba(139,124,246,0.12);
+  --user-border: rgba(139,124,246,0.25);
+  --green: #34d399;
+  --red: #f87171;
+  --amber: #fbbf24;
+  --mono: 'JetBrains Mono', 'SF Mono', Menlo, monospace;
+  --sans: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+  --radius: 10px;
+}
 
-#status { padding: 4px 16px; font-size: 0.75em; color: #555; background: #111; flex-shrink: 0; }
-.dot { display: inline-block; width: 8px; height: 8px; border-radius: 50%; margin-right: 6px; }
-.dot.on { background: #2ecc71; }
-.dot.off { background: #e74c3c; }
+* { margin: 0; padding: 0; box-sizing: border-box; }
+body { font-family: var(--sans); background: var(--bg); color: var(--text); height: 100vh; display: flex; flex-direction: column; font-size: 14px; letter-spacing: -0.01em; -webkit-font-smoothing: antialiased; }
+
+/* Status bar */
+#status { padding: 6px 20px; font-size: 11px; font-weight: 500; color: var(--text-dim); background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; display: flex; align-items: center; gap: 8px; letter-spacing: 0.02em; text-transform: uppercase; }
+.dot { width: 6px; height: 6px; border-radius: 50%; }
+.dot.on { background: var(--green); box-shadow: 0 0 6px rgba(52,211,153,0.4); }
+.dot.off { background: var(--red); box-shadow: 0 0 6px rgba(248,113,113,0.3); }
 
 #main { flex: 1; display: flex; overflow: hidden; }
 
-/* Left pane: chat */
-#chat-pane { flex: 1; display: flex; flex-direction: column; border-right: 1px solid #333; min-width: 0; }
-#messages { flex: 1; overflow-y: auto; padding: 16px; display: flex; flex-direction: column; gap: 8px; }
-.msg { max-width: 90%; padding: 10px 14px; border-radius: 12px; line-height: 1.5; white-space: pre-wrap; word-wrap: break-word; }
-.msg.user { align-self: flex-end; background: #0f3460; color: #fff; border-bottom-right-radius: 4px; }
-.msg.jevon { align-self: flex-start; background: #16213e; color: #e0e0e0; border-bottom-left-radius: 4px; white-space: normal; }
-.msg.jevon p { margin: 0.4em 0; }
+/* Chat pane */
+#chat-pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+#messages { flex: 1; overflow-y: auto; padding: 24px 20px; display: flex; flex-direction: column; gap: 6px; scrollbar-width: thin; scrollbar-color: var(--surface-high) transparent; }
+#messages::-webkit-scrollbar { width: 6px; }
+#messages::-webkit-scrollbar-track { background: transparent; }
+#messages::-webkit-scrollbar-thumb { background: var(--surface-high); border-radius: 3px; }
+
+.msg { max-width: 85%; padding: 10px 16px; border-radius: var(--radius); line-height: 1.6; font-size: 14px; }
+.msg.user { align-self: flex-end; background: var(--user-bg); color: var(--text); border: 1px solid var(--user-border); white-space: pre-wrap; word-wrap: break-word; }
+.msg.jevon { align-self: flex-start; background: transparent; color: var(--text); white-space: normal; padding: 10px 4px; }
+
+/* Markdown in agent responses */
+.msg.jevon p { margin: 0.5em 0; }
 .msg.jevon p:first-child { margin-top: 0; }
 .msg.jevon p:last-child { margin-bottom: 0; }
-.msg.jevon code { background: rgba(0,0,0,0.3); padding: 1px 4px; border-radius: 3px; font-size: 0.9em; }
-.msg.jevon pre { background: rgba(0,0,0,0.3); padding: 8px; border-radius: 6px; overflow-x: auto; margin: 0.4em 0; }
-.msg.jevon pre code { background: none; padding: 0; }
-.msg.jevon ul, .msg.jevon ol { padding-left: 1.5em; margin: 0.4em 0; }
-.msg.jevon h1, .msg.jevon h2, .msg.jevon h3 { margin: 0.5em 0 0.2em; font-size: 1em; }
-.msg.jevon blockquote { border-left: 3px solid #555; padding-left: 8px; margin: 0.4em 0; color: #aaa; }
-.msg.jevon table { border-collapse: collapse; margin: 0.4em 0; font-size: 0.9em; }
-.msg.jevon th, .msg.jevon td { border: 1px solid #333; padding: 4px 8px; }
-#input-bar { display: flex; gap: 8px; padding: 12px 16px; background: #16213e; border-top: 1px solid #333; }
-#input { flex: 1; padding: 10px 14px; border-radius: 8px; border: 1px solid #333; background: #1a1a2e; color: #e0e0e0; font-size: 15px; outline: none; font-family: inherit; }
-#input:focus { border-color: #0f3460; }
-#send { padding: 10px 20px; border-radius: 8px; border: none; background: #0f3460; color: #fff; font-size: 15px; cursor: pointer; }
-#send:hover { background: #1a5276; }
-#send:disabled { opacity: 0.5; cursor: not-allowed; }
+.msg.jevon code { background: var(--surface-raised); padding: 2px 6px; border-radius: 4px; font-family: var(--mono); font-size: 0.88em; color: var(--accent); }
+.msg.jevon pre { background: var(--surface); border: 1px solid var(--border); padding: 12px 14px; border-radius: 8px; overflow-x: auto; margin: 0.6em 0; }
+.msg.jevon pre code { background: none; padding: 0; color: var(--text); }
+.msg.jevon ul, .msg.jevon ol { padding-left: 1.5em; margin: 0.5em 0; }
+.msg.jevon li { margin: 0.2em 0; }
+.msg.jevon h1, .msg.jevon h2, .msg.jevon h3 { margin: 0.8em 0 0.3em; font-weight: 600; color: #fff; }
+.msg.jevon h1 { font-size: 1.1em; }
+.msg.jevon h2 { font-size: 1.05em; }
+.msg.jevon h3 { font-size: 1em; }
+.msg.jevon blockquote { border-left: 2px solid var(--accent); padding-left: 12px; margin: 0.5em 0; color: var(--text-dim); }
+.msg.jevon table { border-collapse: collapse; margin: 0.5em 0; font-size: 0.9em; }
+.msg.jevon th, .msg.jevon td { border: 1px solid var(--border); padding: 6px 10px; }
+.msg.jevon th { background: var(--surface); font-weight: 500; }
+.msg.jevon strong { color: #fff; font-weight: 600; }
+.msg.jevon a { color: var(--accent); text-decoration: none; }
+.msg.jevon a:hover { text-decoration: underline; }
+
+/* Input bar */
+#input-bar { display: flex; gap: 10px; padding: 16px 20px; background: var(--surface); border-top: 1px solid var(--border); }
+#input { flex: 1; padding: 11px 16px; border-radius: 8px; border: 1px solid var(--border); background: var(--bg); color: var(--text); font-size: 14px; font-family: var(--sans); outline: none; transition: border-color 0.15s; }
+#input::placeholder { color: var(--text-muted); }
+#input:focus { border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-dim); }
+#send { padding: 11px 22px; border-radius: 8px; border: none; background: var(--accent); color: #fff; font-size: 13px; font-weight: 600; font-family: var(--sans); cursor: pointer; letter-spacing: 0.02em; transition: opacity 0.15s; }
+#send:hover { opacity: 0.85; }
+#send:disabled { opacity: 0.3; cursor: not-allowed; }
 
 /* Collapsible turn details */
-.turn-details { align-self: flex-start; max-width: 90%; font-size: 0.8em; margin: 0; }
-.turn-details summary { cursor: pointer; color: #555; padding: 0 8px; font-size: 0.7em; list-style: none; user-select: none; line-height: 1.2; }
-.turn-details summary::before { content: '\25b6'; margin-right: 4px; display: inline-block; transition: transform 0.15s; }
+.turn-details { align-self: flex-start; max-width: 85%; margin: 0; }
+.turn-details summary { cursor: pointer; color: var(--text-muted); padding: 2px 4px; font-size: 10px; list-style: none; user-select: none; line-height: 1; }
+.turn-details summary::before { content: '\25b8'; margin-right: 3px; display: inline-block; transition: transform 0.15s; font-size: 9px; }
 .turn-details[open] summary::before { transform: rotate(90deg); }
 .turn-details summary::-webkit-details-marker { display: none; }
-.turn-details summary:hover { color: #888; }
+.turn-details summary:hover { color: var(--text-dim); }
 .turn-details[open] summary { margin-bottom: 4px; }
-.turn-details .turn-items { display: flex; flex-direction: column; gap: 2px; padding: 4px 8px; border-left: 2px solid #333; margin-left: 8px; }
-.turn-item { font-family: "SF Mono", Menlo, monospace; font-size: 0.85em; padding: 2px 0; }
-.turn-item.tool-use { color: #b8bb26; }
-.turn-item.tool-result { color: #83a598; }
-.turn-item.text { color: #d0d0d0; }
-.turn-item.error { color: #fb4934; }
+.turn-details .turn-items { display: flex; flex-direction: column; gap: 1px; padding: 4px 10px; border-left: 1px solid var(--border); margin-left: 6px; }
+.turn-item { font-family: var(--mono); font-size: 11px; padding: 1px 0; letter-spacing: -0.02em; }
+.turn-item.tool-use { color: var(--amber); }
+.turn-item.tool-result { color: var(--text-dim); }
 
 /* Right pane: agents */
-#activity-pane { width: 300px; flex-shrink: 0; display: flex; flex-direction: column; background: #111; }
-#activity-header { padding: 8px 16px; font-size: 0.85em; font-weight: 600; color: #888; border-bottom: 1px solid #222; text-transform: uppercase; letter-spacing: 0.5px; }
-#agents { flex: 1; overflow-y: auto; padding: 8px; font-size: 0.85em; }
-.agent-node { padding: 4px 8px; border-radius: 4px; margin-bottom: 2px; display: flex; align-items: center; gap: 6px; }
-.agent-node .agent-dot { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-.agent-node .agent-dot.running { background: #2ecc71; }
-.agent-node .agent-dot.stopped { background: #555; }
-.agent-node .agent-name { color: #e0e0e0; font-weight: 500; }
-.agent-node .agent-dir { color: #555; font-size: 0.8em; margin-left: auto; font-family: "SF Mono", Menlo, monospace; }
-.agent-children { padding-left: 16px; border-left: 1px solid #333; margin-left: 11px; }
+#activity-pane { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border); }
+#activity-header { padding: 10px 16px; font-size: 10px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.08em; }
+#agents { flex: 1; overflow-y: auto; padding: 8px 12px; }
+.agent-node { padding: 6px 8px; border-radius: 6px; margin-bottom: 1px; display: flex; align-items: center; gap: 8px; transition: background 0.1s; }
+.agent-node:hover { background: var(--surface-raised); }
+.agent-node .agent-dot { width: 5px; height: 5px; border-radius: 50%; flex-shrink: 0; }
+.agent-node .agent-dot.running { background: var(--green); box-shadow: 0 0 4px rgba(52,211,153,0.3); }
+.agent-node .agent-dot.stopped { background: var(--text-muted); }
+.agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; }
+.agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; }
+.agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
 </style>
 </head>
 <body>
-<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting...</span></div>
+<div id="status"><span class="dot off" id="dot"></span><span id="status-text">connecting</span></div>
 <div id="main">
   <div id="chat-pane">
     <div id="messages"></div>
@@ -92,7 +133,6 @@ const sTxt = document.getElementById('status-text');
 const agentsEl = document.getElementById('agents');
 let ws;
 
-// Current turn's collapsible details element (between user msg and final response).
 let turnDetails = null;
 let turnItems = null;
 let turnCount = 0;
@@ -101,7 +141,7 @@ function connect() {
   const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
   ws = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/chat');
   ws.onopen = () => { dot.className='dot on'; sTxt.textContent='connected'; sendBtn.disabled=false; msgs.innerHTML=''; turnDetails=null; turnItems=null; turnCount=0; };
-  ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting...'; sendBtn.disabled=true; setTimeout(connect,2000); };
+  ws.onclose = () => { dot.className='dot off'; sTxt.textContent='reconnecting'; sendBtn.disabled=true; setTimeout(connect,2000); };
   ws.onmessage = e => { try{handle(JSON.parse(e.data))}catch(x){console.error(x)} };
 }
 
@@ -111,12 +151,10 @@ function handle(m) {
   if (typ==='user') {
     const content = m.message?.content;
     if (typeof content === 'string') {
-      // Human message — close previous turn, show message, start new turn.
       closeTurn();
       addMsg('user', content);
       startTurn();
     } else if (Array.isArray(content)) {
-      // Tool results — show in current turn's collapsible section.
       content.forEach(c => {
         if (c.type==='tool_result') {
           const inner = c.content;
@@ -127,7 +165,6 @@ function handle(m) {
         }
       });
     }
-
   } else if (typ==='assistant') {
     const content = m.message?.content;
     if (!Array.isArray(content)) return;
@@ -137,14 +174,12 @@ function handle(m) {
         addTurnItem('tool-use', c.name + (c.input ? ': ' + summariseInput(c.input) : ''));
       }
     });
-    // Only close the turn and show text when the assistant produces a final text response.
     if (hasText) {
       closeTurn();
       content.forEach(c => {
         if (c.type==='text' && c.text) addMsg('jevon', c.text);
       });
     }
-
   } else if (typ==='tool_result' || typ==='result') {
     const content = m.content || m.message?.content;
     if (Array.isArray(content)) {
@@ -154,7 +189,6 @@ function handle(m) {
     } else if (typeof content === 'string') {
       addTurnItem('tool-result', truncate(content, 120));
     }
-
   } else if (typ==='system') {
     closeTurn();
   }
@@ -163,7 +197,7 @@ function handle(m) {
 function startTurn() {
   turnDetails = document.createElement('details');
   turnDetails.className = 'turn-details';
-  turnDetails.open = true; // Latest turn starts open.
+  turnDetails.open = true;
   const summary = document.createElement('summary');
   turnDetails.appendChild(summary);
   turnItems = document.createElement('div');
@@ -178,7 +212,6 @@ function closeTurn() {
   if (!turnDetails) return;
   const n = turnItems ? turnItems.children.length : 0;
   if (n === 0) {
-    // No intermediate events — remove the empty details.
     turnDetails.remove();
   } else {
     turnDetails.open = false;
@@ -213,7 +246,6 @@ function addMsg(role, text) {
 function refreshAgents() {
   fetch('/api/agents').then(r=>r.json()).then(agents => {
     agentsEl.innerHTML = '';
-    // Build tree: group by parent.
     const byParent = {};
     agents.forEach(a => {
       const p = a.parent || '';
@@ -252,7 +284,6 @@ function summariseInput(obj) {
   if (typeof obj === 'string') return truncate(obj, 60);
   const keys = Object.keys(obj);
   if (keys.length === 0) return '';
-  // Show first key's value as summary.
   const v = obj[keys[0]];
   return typeof v === 'string' ? truncate(v, 60) : keys.join(', ');
 }
