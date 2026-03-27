@@ -6,6 +6,7 @@ package server
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"log/slog"
 	"net/http"
 	"os"
@@ -21,6 +22,50 @@ func (s *Server) SetProcess(proc *claude.Process) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.proc = proc
+}
+
+// SetRegistry attaches the agent registry for the /api/agents endpoint.
+func (s *Server) SetRegistry(reg *claude.Registry) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.registry = reg
+}
+
+// handleListAgents returns all registered agents with their status.
+func (s *Server) handleListAgents(w http.ResponseWriter, r *http.Request) {
+	s.mu.RLock()
+	reg := s.registry
+	s.mu.RUnlock()
+
+	if reg == nil {
+		json.NewEncoder(w).Encode([]any{})
+		return
+	}
+
+	defs := reg.List()
+	type agentInfo struct {
+		Name    string `json:"name"`
+		WorkDir string `json:"workdir"`
+		Parent  string `json:"parent,omitempty"`
+		Status  string `json:"status"`
+	}
+
+	agents := make([]agentInfo, len(defs))
+	for i, d := range defs {
+		status := "stopped"
+		if proc := reg.Get(d.Name); proc != nil && proc.Alive() {
+			status = "running"
+		}
+		agents[i] = agentInfo{
+			Name:    d.Name,
+			WorkDir: d.WorkDir,
+			Parent:  d.Parent,
+			Status:  status,
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(agents)
 }
 
 // handleChat is a direct WebSocket ↔ Claude PTY bridge.

@@ -622,7 +622,8 @@ func main() {
 	registry.StartAll()
 	defer registry.StopAll()
 
-	// Wire the chat agent to the web UI.
+	// Wire registry and chat agent to the web UI.
+	srv.SetRegistry(registry)
 	if chatProc := registry.Get("chat"); chatProc != nil {
 		srv.SetProcess(chatProc)
 		chatProc.OnEvent(func(ev claude.Event) {
