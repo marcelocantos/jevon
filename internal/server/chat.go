@@ -140,20 +140,24 @@ func readJSONLHistory(path string) []map[string]any {
 			if msg == nil {
 				continue
 			}
-			content, _ := msg["content"].([]any)
-			for _, c := range content {
-				cm, _ := c.(map[string]any)
-				if cm["type"] == "text" {
-					text, _ := cm["text"].(string)
-					if text != "" {
-						role := "jevon"
-						if typ == "user" {
-							role = "user"
+			role := "jevon"
+			if typ == "user" {
+				role = "user"
+			}
+			// User messages: content is a plain string.
+			// Assistant messages: content is an array of {type, text} objects.
+			switch content := msg["content"].(type) {
+			case string:
+				if content != "" {
+					history = append(history, map[string]any{"role": role, "text": content})
+				}
+			case []any:
+				for _, c := range content {
+					cm, _ := c.(map[string]any)
+					if cm["type"] == "text" {
+						if text, _ := cm["text"].(string); text != "" {
+							history = append(history, map[string]any{"role": role, "text": text})
 						}
-						history = append(history, map[string]any{
-							"role": role,
-							"text": text,
-						})
 					}
 				}
 			}
