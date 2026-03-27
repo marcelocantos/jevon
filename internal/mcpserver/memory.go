@@ -27,6 +27,14 @@ func (s *Server) SetMemory(mem *memory.Store) {
 	)
 
 	s.mcpSrv.AddTool(
+		mcp.NewTool("jevon_memory_query",
+			mcp.WithDescription("Run a read-only SQL query against the transcript memory database. Tables: messages (id, session_id, project, role, text, timestamp, type), messages_fts (FTS5 virtual table on text/role/project/session_id), ingest_state (path, offset)."),
+			mcp.WithString("query", mcp.Required(), mcp.Description("SQL SELECT query")),
+		),
+		s.handleMemoryQuery,
+	)
+
+	s.mcpSrv.AddTool(
 		mcp.NewTool("jevon_memory_stats",
 			mcp.WithDescription("Show transcript memory statistics — how many sessions and messages are indexed."),
 		),
@@ -63,6 +71,32 @@ func (s *Server) handleSearchMemory(_ context.Context, req mcp.CallToolRequest) 
 		}
 		fmt.Fprintf(&b, "[%s] %s | %s | %s\n%s\n\n",
 			r.Role, r.Project, sid, r.Timestamp, r.Text)
+	}
+	return mcp.NewToolResultText(b.String()), nil
+}
+
+func (s *Server) handleMemoryQuery(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+	args := req.GetArguments()
+	query, _ := args["query"].(string)
+	if query == "" {
+		return mcp.NewToolResultError("query is required"), nil
+	}
+
+	rows, err := s.memory.Query(query)
+	if err != nil {
+		return mcp.NewToolResultError(fmt.Sprintf("query failed: %v", err)), nil
+	}
+
+	if len(rows) == 0 {
+		return mcp.NewToolResultText("No rows returned."), nil
+	}
+
+	var b strings.Builder
+	for _, row := range rows {
+		for k, v := range row {
+			fmt.Fprintf(&b, "%s: %v  ", k, v)
+		}
+		b.WriteByte('\n')
 	}
 	return mcp.NewToolResultText(b.String()), nil
 }

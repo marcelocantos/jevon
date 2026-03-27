@@ -194,6 +194,37 @@ func (s *Store) Stats() (sessions int, messages int, err error) {
 	return
 }
 
+// Query runs a read-only SQL query and returns rows as maps.
+func (s *Store) Query(query string) ([]map[string]any, error) {
+	rows, err := s.db.Query(query)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	cols, _ := rows.Columns()
+	var results []map[string]any
+	for rows.Next() {
+		vals := make([]any, len(cols))
+		ptrs := make([]any, len(cols))
+		for i := range vals {
+			ptrs[i] = &vals[i]
+		}
+		if err := rows.Scan(ptrs...); err != nil {
+			continue
+		}
+		row := make(map[string]any, len(cols))
+		for i, col := range cols {
+			row[col] = vals[i]
+		}
+		results = append(results, row)
+		if len(results) >= 100 {
+			break
+		}
+	}
+	return results, nil
+}
+
 func (s *Store) ingestFile(path string) error {
 	s.mu.Lock()
 	offset := s.offsets[path]
