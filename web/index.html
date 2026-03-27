@@ -91,15 +91,24 @@ function handle(m) {
   const typ = m.type;
 
   if (typ==='user') {
-    // Close any previous open turn.
-    closeTurn();
     const content = m.message?.content;
-    if (typeof content === 'string') addMsg('user', content);
-    else if (Array.isArray(content)) content.forEach(c => {
-      if (c.type==='text') addMsg('user', c.text);
-    });
-    // Start a new collapsible turn for the work that follows.
-    startTurn();
+    if (typeof content === 'string') {
+      // Human message — close previous turn, show message, start new turn.
+      closeTurn();
+      addMsg('user', content);
+      startTurn();
+    } else if (Array.isArray(content)) {
+      // Tool results — show in current turn's collapsible section.
+      content.forEach(c => {
+        if (c.type==='tool_result') {
+          const inner = c.content;
+          if (typeof inner === 'string') addTurnItem('tool-result', truncate(inner, 120));
+          else if (Array.isArray(inner)) inner.forEach(ic => {
+            if (ic.type==='text' && ic.text) addTurnItem('tool-result', truncate(ic.text, 120));
+          });
+        }
+      });
+    }
 
   } else if (typ==='assistant') {
     const content = m.message?.content;
