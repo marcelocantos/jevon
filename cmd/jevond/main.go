@@ -15,7 +15,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/marcelocantos/sqlpipe/go/sqlpipe"
 
 	"github.com/marcelocantos/jevon/internal/claude"
 	"github.com/marcelocantos/jevon/internal/cli"
@@ -23,11 +22,11 @@ import (
 	"github.com/marcelocantos/jevon/internal/discovery"
 	"github.com/marcelocantos/jevon/internal/jevon"
 	"github.com/marcelocantos/jevon/internal/manager"
+	"github.com/marcelocantos/jevon/internal/memory"
 	"github.com/marcelocantos/jevon/internal/mcpserver"
 	"github.com/marcelocantos/tern/qr"
 	"github.com/marcelocantos/jevon/internal/server"
 	"github.com/marcelocantos/jevon/internal/session"
-	jvsync "github.com/marcelocantos/jevon/internal/sync"
 	"github.com/marcelocantos/jevon/internal/transcript"
 	"github.com/marcelocantos/jevon/internal/ui"
 )
@@ -217,53 +216,6 @@ func main() {
 	}
 	defer database.Close()
 
-	// Set up sqlpipe sync database (separate from main DB to avoid
-	// preupdate hook conflicts).
-	//
-	// The onRequest callback needs the Server, which doesn't exist yet.
-	// srvRef is assigned after server.New() below; the closure captures it
-	// by pointer so the nil check works at call time.
-	var srvRef *server.Server
-	syncDBPath := filepath.Join(homeDir, ".jevon", "sync.db")
-	var syncMgr *jvsync.SyncManager
-	if syncDB, err := sqlpipe.OpenDatabase(syncDBPath); err != nil {
-		slog.Error("sqlpipe: cannot open sync db — running without sync", "err", err)
-	} else if err := db.CreateSyncSchema(syncDB); err != nil {
-		slog.Error("sqlpipe: schema creation failed — running without sync", "err", err)
-		syncDB.Close()
-	} else {
-		syncDB.Close() // SyncManager opens its own dedicated connections.
-
-		sm, err := jvsync.NewSyncManager(syncDBPath, func(req jvsync.Request) {
-			if srvRef == nil {
-				return
-			}
-			switch req.Type {
-			case "message":
-				srvRef.HandleUserMessage(req.Payload)
-			case "action":
-				srvRef.HandleAction(req.Payload, "")
-			}
-		})
-		if err != nil {
-			slog.Error("sqlpipe: init failed — running without sync", "err", err)
-		} else {
-			syncMgr = sm
-			defer syncMgr.Close()
-			if err := syncMgr.SetVersion(cli.Version); err != nil {
-				slog.Warn("sqlpipe: failed to set version", "err", err)
-			}
-			// Seed sync_transcript from legacy transcript table.
-			if err := syncMgr.SeedTranscript(database.SqlpipeDB()); err != nil {
-				slog.Warn("sqlpipe: transcript seeding failed", "err", err)
-			}
-			// Flush seed data so it's available for the first client handshake.
-			if _, err := syncMgr.Flush(); err != nil {
-				slog.Warn("sqlpipe: post-seed flush failed", "err", err)
-			}
-		}
-	}
-
 	// Create components.
 	scanner := discovery.NewScanner(filepath.Join(homeDir, ".claude", "projects"))
 	mgr := manager.New(*model, *workDir, database, scanner)
@@ -296,11 +248,6 @@ func main() {
 	vs.SetConnected(cli.Version, os.Getenv("HOME"))
 
 	srv := server.New(jev, mgr, database, cli.Version, luaRT, vs)
-	srvRef = srv // Wire the forward reference for syncMgr's onRequest callback.
-	if syncMgr != nil {
-		srv.SetSyncManager(syncMgr)
-		slog.Info("sqlpipe sync enabled")
-	}
 
 	// Load OpenAI API key from Keychain (fall back to env var).
 	if key, err := loadKeychainKey("openai-api-key"); err == nil && key != "" {
@@ -609,6 +556,28 @@ func main() {
 
 	// Wire registry into MCP server for agent tools.
 	mcpSrv.SetRegistry(registry)
+
+	// Transcript memory — searchable index of all Claude sessions.
+	claudeProjectsDir := filepath.Join(homeDir, ".claude", "projects")
+	memDBPath := filepath.Join(homeDir, ".jevon", "memory.db")
+	mem, err := memory.New(memDBPath, claudeProjectsDir)
+	if err != nil {
+		slog.Error("transcript memory failed", "err", err)
+	} else {
+		mcpSrv.SetMemory(mem)
+		defer mem.Close()
+		go func() {
+			slog.Info("memory: ingesting existing sessions")
+			if err := mem.IngestAll(); err != nil {
+				slog.Error("memory: initial ingest failed", "err", err)
+			}
+			sessions, messages, _ := mem.Stats()
+			slog.Info("memory: initial ingest complete", "sessions", sessions, "messages", messages)
+			if err := mem.Watch(); err != nil {
+				slog.Error("memory: watch failed", "err", err)
+			}
+		}()
+	}
 
 	// Ensure the primary chat agent exists.
 	chatDef, err := registry.EnsureAgent("chat", jevDir, "", true)
