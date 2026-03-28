@@ -11,6 +11,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strings"
+	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
 	"github.com/mark3labs/mcp-go/server"
@@ -54,6 +55,9 @@ type Server struct {
 	transcript   *TranscriptOps
 	mcpSrv       *server.MCPServer
 	transport    *server.StreamableHTTPServer
+
+	mu           sync.Mutex
+	notifyJevon  NotifyFunc
 }
 
 // New creates an MCP server with jevon tools wired to the given manager.

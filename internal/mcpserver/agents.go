@@ -7,29 +7,18 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"os"
-	"path/filepath"
 	"strings"
+	"sync"
 
 	"github.com/mark3labs/mcp-go/mcp"
 
 	"github.com/marcelocantos/jevon/internal/claude"
 )
 
-// displayWorkDir formats a workdir for display. Paths under
-// ~/work/github.com/ are shortened to " org/repo".
-func displayWorkDir(path string) string {
-	home, _ := os.UserHomeDir()
-	ghPrefix := filepath.Join(home, "work", "github.com")
-	if rest, ok := strings.CutPrefix(path, ghPrefix+"/"); ok {
-		// rest is "org/repo" or "org/repo/sub/path"
-		parts := strings.SplitN(rest, "/", 3)
-		if len(parts) >= 2 {
-			return "\uf09b " + parts[0] + "/" + parts[1]
-		}
-	}
-	return path
-}
+// NotifyFunc injects a text message into the Jevon overseer's PTY input.
+type NotifyFunc func(text string)
 
 // SetRegistry attaches the agent registry to the MCP server and
 // registers agent management tools.
@@ -55,7 +44,7 @@ func (s *Server) SetRegistry(registry *claude.Registry) {
 
 	s.mcpSrv.AddTool(
 		mcp.NewTool("jevon_agent_send",
-			mcp.WithDescription("Send a message to a running agent and return its response. The agent retains full conversation history."),
+			mcp.WithDescription("Send a message to a running agent. Returns immediately — the agent processes asynchronously. When the agent responds, you will receive a notification with the response text."),
 			mcp.WithString("name", mcp.Required(), mcp.Description("Agent name")),
 			mcp.WithString("text", mcp.Required(), mcp.Description("Message to send")),
 		),
@@ -71,6 +60,14 @@ func (s *Server) SetRegistry(registry *claude.Registry) {
 	)
 }
 
+// SetNotify sets the callback for injecting notifications into the
+// Jevon overseer (e.g. agent responses).
+func (s *Server) SetNotify(fn NotifyFunc) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.notifyJevon = fn
+}
+
 func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	defs := s.registry.List()
 	if len(defs) == 0 {
@@ -84,7 +81,7 @@ func (s *Server) handleAgentList(_ context.Context, _ mcp.CallToolRequest) (*mcp
 		if proc != nil && proc.Alive() {
 			status = "running"
 		}
-		fmt.Fprintf(&b, "%-20s %-10s %s (session: %s)\n", d.Name, status, displayWorkDir(d.WorkDir), d.SessionID[:8])
+		fmt.Fprintf(&b, "%-20s %-10s %s (session: %s)\n", d.Name, status, d.WorkDir, d.SessionID[:8])
 	}
 	return mcp.NewToolResultText(b.String()), nil
 }
@@ -115,15 +112,13 @@ func (s *Server) handleAgentStart(_ context.Context, req mcp.CallToolRequest) (*
 		return mcp.NewToolResultError(fmt.Sprintf("start failed: %v", err)), nil
 	}
 
-	// Wire events to broadcast (for activity feed).
-	proc.OnEvent(func(ev claude.Event) {
-		s.onAgentEvent(name, ev)
-	})
+	// Wire events: broadcast to web UI and notify Jevon on agent responses.
+	s.wireAgentEvents(name, proc)
 
 	return mcp.NewToolResultText(fmt.Sprintf("Agent %q started (session: %s, workdir: %s)", name, def.SessionID[:8], def.WorkDir)), nil
 }
 
-func (s *Server) handleAgentSend(ctx context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
+func (s *Server) handleAgentSend(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
 	args := req.GetArguments()
 	name, _ := args["name"].(string)
 	text, _ := args["text"].(string)
@@ -141,14 +136,7 @@ func (s *Server) handleAgentSend(ctx context.Context, req mcp.CallToolRequest) (
 		return mcp.NewToolResultError(fmt.Sprintf("send failed: %v", err)), nil
 	}
 
-	// Wait for the response by tailing the JSONL for an assistant message
-	// followed by a system (turn-complete) event.
-	response, err := proc.WaitForResponse(ctx)
-	if err != nil {
-		return mcp.NewToolResultError(fmt.Sprintf("wait failed: %v", err)), nil
-	}
-
-	return mcp.NewToolResultText(response), nil
+	return mcp.NewToolResultText(fmt.Sprintf("Message sent to %q. You will be notified when it responds.", name)), nil
 }
 
 func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*mcp.CallToolResult, error) {
@@ -162,14 +150,63 @@ func (s *Server) handleAgentStop(_ context.Context, req mcp.CallToolRequest) (*m
 	return mcp.NewToolResultText(fmt.Sprintf("Agent %q stopped.", name)), nil
 }
 
-// onAgentEvent is called for every JSONL event from any agent.
-// It can be used to broadcast to the activity feed.
-func (s *Server) onAgentEvent(name string, ev claude.Event) {
-	// Broadcast to activity feed via a structured event.
+// wireAgentEvents sets up the event handler for an agent process.
+// It broadcasts to the web UI and notifies Jevon when the agent
+// produces a text response.
+func (s *Server) wireAgentEvents(name string, proc *claude.Process) {
+	var mu sync.Mutex
+	var responseText strings.Builder
+
+	proc.OnEvent(func(ev claude.Event) {
+		// Broadcast raw event to web UI activity feed.
+		s.broadcastAgentEvent(name, ev)
+
+		mu.Lock()
+		defer mu.Unlock()
+
+		switch ev.Type {
+		case "assistant":
+			if ev.Text != "" {
+				responseText.WriteString(ev.Text)
+			}
+		case "system":
+			// Turn complete — notify Jevon with the accumulated response.
+			text := responseText.String()
+			responseText.Reset()
+			if text != "" {
+				s.notify(name, text)
+			}
+		}
+	})
+}
+
+// notify injects an agent response notification into Jevon's PTY.
+func (s *Server) notify(agentName, text string) {
+	s.mu.Lock()
+	fn := s.notifyJevon
+	s.mu.Unlock()
+
+	if fn == nil {
+		slog.Warn("agent response but no notify function set", "agent", agentName)
+		return
+	}
+
+	// Truncate very long responses for the notification.
+	if len(text) > 2000 {
+		text = text[:1997] + "..."
+	}
+
+	msg := fmt.Sprintf("[Agent %s responded]\n%s", agentName, text)
+	slog.Info("notifying jevon", "agent", agentName, "len", len(text))
+	fn(msg)
+}
+
+// broadcastAgentEvent sends agent events to the web UI.
+func (s *Server) broadcastAgentEvent(name string, ev claude.Event) {
 	data, _ := json.Marshal(map[string]any{
 		"type":  "agent_event",
 		"agent": name,
 		"event": json.RawMessage(ev.Raw),
 	})
-	_ = data // TODO: wire to activity WebSocket
+	_ = data // TODO: wire to activity WebSocket via BroadcastChat
 }

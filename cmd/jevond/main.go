@@ -619,6 +619,13 @@ func main() {
 		jevonProc.OnEvent(func(ev claude.Event) {
 			srv.BroadcastChat(string(ev.Raw))
 		})
+
+		// Wire agent response notifications back into Jevon's PTY.
+		mcpSrv.SetNotify(func(text string) {
+			if err := jevonProc.Send(text); err != nil {
+				slog.Error("notify jevon failed", "err", err)
+			}
+		})
 	}
 
 	// Graceful shutdown on signal.
