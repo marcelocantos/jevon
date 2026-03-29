@@ -210,7 +210,7 @@ func (p *Process) Send(msg string) error {
 	if !alive {
 		return fmt.Errorf("claude process not running")
 	}
-	data := []byte(msg + "\r")
+	data := []byte(msg + "\n")
 	n, err := p.ptmx.Write(data)
 	slog.Info("pty write", "bytes", n, "err", err, "data", string(data))
 	return err
