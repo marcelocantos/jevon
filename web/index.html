@@ -5,6 +5,9 @@
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Jevon</title>
 <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/xterm/lib/xterm.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@xterm/addon-fit/lib/addon-fit.min.js"></script>
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@xterm/xterm/css/xterm.min.css">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
 <style>
@@ -125,7 +128,7 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .turn-item.tool-result { color: var(--text-dim); }
 
 /* Right pane: agents */
-#activity-pane { width: 260px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border); }
+#activity-pane { width: 420px; flex-shrink: 0; display: flex; flex-direction: column; background: var(--surface); border-left: 1px solid var(--border); }
 #activity-header { padding: 10px 16px; font-size: 10px; font-weight: 600; color: var(--text-muted); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.08em; }
 
 /* Theme toggle */
@@ -142,6 +145,13 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
 .agent-node .agent-name { color: var(--text); font-size: 13px; font-weight: 500; }
 .agent-node .agent-dir { color: var(--text-muted); font-size: 10px; margin-left: auto; font-family: var(--mono); letter-spacing: -0.02em; }
 .agent-children { padding-left: 14px; border-left: 1px solid var(--border); margin-left: 10px; }
+
+/* Terminal viewer */
+#terminal-header { padding: 6px 16px; font-size: 10px; font-weight: 600; color: var(--text-muted); border-top: 1px solid var(--border); border-bottom: 1px solid var(--border); text-transform: uppercase; letter-spacing: 0.08em; display: none; }
+#terminal-container { flex: 1; min-height: 0; overflow: hidden; display: none; }
+#terminal-container .xterm { height: 100%; }
+.agent-node { cursor: pointer; }
+.agent-node.selected { background: var(--accent-dim); }
 </style>
 </head>
 <body>
@@ -157,6 +167,8 @@ body { font-family: var(--sans); background: var(--bg); color: var(--text); heig
   <div id="activity-pane">
     <div id="activity-header">Agents</div>
     <div id="agents"></div>
+    <div id="terminal-header"></div>
+    <div id="terminal-container"></div>
   </div>
 </div>
 <script>
@@ -294,10 +306,12 @@ function renderTree(byParent, parent, container) {
   const children = byParent[parent] || [];
   children.forEach(a => {
     const node = document.createElement('div');
-    node.className = 'agent-node';
+    node.className = 'agent-node' + (a.name === selectedAgent ? ' selected' : '');
+    node.dataset.agent = a.name;
     node.innerHTML = '<span class="agent-dot '+a.status+'"></span>'
       + '<span class="agent-name">'+escHtml(a.name)+'</span>'
       + '<span class="agent-dir">'+escHtml(shortDir(a.workdir))+'</span>';
+    node.onclick = () => selectAgent(a.name);
     container.appendChild(node);
     if (byParent[a.name]) {
       const sub = document.createElement('div');
@@ -356,6 +370,86 @@ document.getElementById('theme-toggle').addEventListener('click', e => {
   applyTheme(btn.dataset.t);
 });
 applyTheme((document.cookie.match(/(?:^|; )theme=([^;]*)/)||[])[1] || 'system');
+
+// Terminal viewer.
+const termHeader = document.getElementById('terminal-header');
+const termContainer = document.getElementById('terminal-container');
+let term = null;
+let termWs = null;
+let termFit = null;
+let selectedAgent = null;
+
+function selectAgent(name) {
+  if (selectedAgent === name) {
+    // Deselect.
+    closeTerminal();
+    return;
+  }
+  selectedAgent = name;
+  document.querySelectorAll('.agent-node').forEach(n => n.classList.toggle('selected', n.dataset.agent === name));
+  openTerminal(name);
+}
+
+function openTerminal(name) {
+  closeTerminal();
+  termHeader.textContent = name;
+  termHeader.style.display = 'block';
+  termContainer.style.display = 'block';
+
+  term = new Terminal({
+    fontFamily: 'JetBrains Mono, SF Mono, Menlo, monospace',
+    fontSize: 12,
+    theme: {
+      background: '#0c0c0f',
+      foreground: '#d4d4dc',
+      cursor: '#8b7cf6',
+      selectionBackground: 'rgba(139,124,246,0.3)',
+    },
+    scrollback: 10000,
+    convertEol: true,
+  });
+  termFit = new FitAddon.FitAddon();
+  term.loadAddon(termFit);
+  term.open(termContainer);
+  termFit.fit();
+
+  const h = location.hostname === 'localhost' ? '127.0.0.1:'+location.port : location.host;
+  const cols = term.cols;
+  const rows = term.rows;
+  termWs = new WebSocket((location.protocol==='https:'?'wss:':'ws:')+'//'+h+'/ws/agent-terminal?name='+encodeURIComponent(name)+'&cols='+cols+'&rows='+rows);
+  termWs.binaryType = 'arraybuffer';
+  termWs.onmessage = e => {
+    if (e.data instanceof ArrayBuffer) {
+      term.write(new Uint8Array(e.data));
+    } else {
+      term.write(e.data);
+    }
+  };
+  termWs.onclose = () => { /* terminal closed */ };
+
+  // Handle resize.
+  const ro = new ResizeObserver(() => {
+    if (termFit) {
+      termFit.fit();
+      if (termWs && termWs.readyState === 1) {
+        termWs.send(JSON.stringify({type:'resize', cols:term.cols, rows:term.rows}));
+      }
+    }
+  });
+  ro.observe(termContainer);
+  termContainer._ro = ro;
+}
+
+function closeTerminal() {
+  selectedAgent = null;
+  if (termWs) { termWs.close(); termWs = null; }
+  if (term) { term.dispose(); term = null; }
+  if (termContainer._ro) { termContainer._ro.disconnect(); termContainer._ro = null; }
+  termHeader.style.display = 'none';
+  termContainer.style.display = 'none';
+  termContainer.innerHTML = '';
+  document.querySelectorAll('.agent-node').forEach(n => n.classList.remove('selected'));
+}
 
 // Hot reload.
 (function hotReload() {

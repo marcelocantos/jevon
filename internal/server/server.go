@@ -213,6 +213,7 @@ func (s *Server) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/ws/chat", s.handleChat)
 	mux.HandleFunc("/ws/remote", s.handleRemote)
 	mux.HandleFunc("GET /api/agents", s.handleListAgents)
+	mux.HandleFunc("/ws/agent-terminal", s.handleAgentTerminal)
 	mux.HandleFunc("GET /api/sessions", s.handleListSessions)
 	mux.HandleFunc("GET /api/sessions/{id}", s.handleGetSession)
 	mux.HandleFunc("POST /api/sessions/{id}/kill", s.handleKillSession)

@@ -61,6 +61,11 @@ type Process struct {
 	alive    bool
 	onEvent  EventFunc
 	stopOnce sync.Once
+
+	// Terminal output streaming.
+	termMu   sync.Mutex
+	termBuf  []byte        // ring buffer of recent PTY output
+	termSubs []chan []byte  // active terminal subscribers
 }
 
 // Start spawns a new Claude Code process in a PTY.
@@ -138,15 +143,15 @@ func Start(cfg Config) (*Process, error) {
 		alive:     true,
 	}
 
-	// Drain PTY output — log first chunk to verify claude started.
+	// Capture PTY output: buffer recent output and broadcast to subscribers.
 	go func() {
 		buf := make([]byte, 4096)
-		first := true
 		for {
 			n, err := ptmx.Read(buf)
-			if n > 0 && first {
-				slog.Info("pty first output", "bytes", n)
-				first = false
+			if n > 0 {
+				data := make([]byte, n)
+				copy(data, buf[:n])
+				p.pushTermOutput(data)
 			}
 			if err != nil {
 				slog.Info("pty read done", "err", err)
@@ -248,6 +253,61 @@ func (p *Process) WaitForResponse(ctx context.Context) (string, error) {
 	case result := <-ch:
 		return result, nil
 	}
+}
+
+const termBufSize = 128 * 1024 // 128KB ring buffer
+
+func (p *Process) pushTermOutput(data []byte) {
+	p.termMu.Lock()
+	defer p.termMu.Unlock()
+
+	// Append to ring buffer, trim if too large.
+	p.termBuf = append(p.termBuf, data...)
+	if len(p.termBuf) > termBufSize {
+		p.termBuf = p.termBuf[len(p.termBuf)-termBufSize:]
+	}
+
+	// Broadcast to all subscribers.
+	for _, ch := range p.termSubs {
+		select {
+		case ch <- data:
+		default:
+			// Subscriber too slow, drop.
+		}
+	}
+}
+
+// SubscribeTerminal returns a channel that receives live PTY output
+// and the buffered recent output. Call UnsubscribeTerminal when done.
+func (p *Process) SubscribeTerminal() (history []byte, ch chan []byte) {
+	p.termMu.Lock()
+	defer p.termMu.Unlock()
+
+	ch = make(chan []byte, 256)
+	p.termSubs = append(p.termSubs, ch)
+
+	history = make([]byte, len(p.termBuf))
+	copy(history, p.termBuf)
+	return
+}
+
+// UnsubscribeTerminal removes a terminal subscriber.
+func (p *Process) UnsubscribeTerminal(ch chan []byte) {
+	p.termMu.Lock()
+	defer p.termMu.Unlock()
+
+	for i, c := range p.termSubs {
+		if c == ch {
+			p.termSubs = append(p.termSubs[:i], p.termSubs[i+1:]...)
+			close(ch)
+			return
+		}
+	}
+}
+
+// Resize changes the PTY window size and signals the process.
+func (p *Process) Resize(cols, rows uint16) error {
+	return pty.Setsize(p.ptmx, &pty.Winsize{Cols: cols, Rows: rows})
 }
 
 // Stop terminates the Claude process.
